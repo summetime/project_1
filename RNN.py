@@ -42,7 +42,6 @@ class RNN(nn.Module):
 
         seql = input.size(1)
         input = self.embed(input)  # (bsize, seq_length, embed_dim)
-        hidden = self.embed(hidden) # (bsize, 1, embed_dim)
         output = []
         for i in range(seql):
             data = torch.cat([input.narrow(1, i, 1), hidden], dim=-1)  # (bsize,1,embed_dim+embed_dim)
