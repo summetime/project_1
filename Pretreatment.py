@@ -117,7 +117,7 @@ def save(datas, file, f5):
 
 if __name__ == "__main__":
     # getText()
-    # Sort()
+    Sort()
     words = handle_1()
     with open("train_file_BPE_sort.txt", 'r', encoding="utf-8") as file, h5py.File("result.hdf5", 'w') as f5:
         save(words, file, f5)
