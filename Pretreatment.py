@@ -66,10 +66,10 @@ def handle_1():
     # words["<pad>"] = 0
     # i = 1
     words = {word:i for i,word in enumerate(sorted(temp_words, reverse=True),0)}
-    # with open("dict.txt",'wb') as file:
-    #     file.write(repr(words).encode("utf-8"))
-    # for i,word in enumerate(sorted(temp_words, reverse=True),1):  # 按照高频到低频存储
-    #     words[word] = i
+    with open("dict.txt",'wb') as file:
+        file.write(repr(words).encode("utf-8"))
+    for i,word in enumerate(sorted(temp_words, reverse=True),1):  # 按照高频到低频存储
+        words[word] = i
         # i += 1
     return words
 
