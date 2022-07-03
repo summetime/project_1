@@ -76,7 +76,6 @@ class RNN(nn.Module):
     def decode(self, input, hidden):
 
         input = self.embed(input)  # (1, embed_dim)
-        # hidden = self.embed(hidden)  # (1, embed_dim)
         data = torch.cat([input,hidden],dim=1)  # (1,embed_dim+embed_dim)
         hidden = self.net(data)
         out = torch.argmax(self.classifier(hidden), dim=1) # (1)
@@ -160,8 +159,7 @@ def decode(args: Dict):
     device = torch.device("cuda:0")  # 在cuda上运行
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
-    # hidden = torch.zeros(1).long()
-    hidden = model.init_hidden(1,32).to(device)
+    hidden = torch.nn.Parameter(torch.zeros(1,32)).to(device)
     result = []
     with torch.no_grad():
         # d = torch.LongTensor(input).to(device)
