@@ -137,7 +137,6 @@ def train(args: Dict):
                     batch = batch.to(device)
                     target = target.to(device)
                 # forward
-                print('cuda: ',cuda)
                 cuda += 1
                 hidden = model.init_hidden(batch.size(0), 1).to(device)
                 cell = hidden
