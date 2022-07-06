@@ -1,12 +1,8 @@
 # wxy
-# wxy
-# RNNs每次只输入一个单词，按照句子的顺序逐个输入，同时维护一个或多个hidden（RNN：1个，hidden，LSTM：2个，hidden & cell）来存储前面输入单词的信息：
-# ht = model(h_{t-1},i_t}
-# h_0 nn.Parameter
-# 输入隐状态和当前词向量 形成新的隐状态
+
 '''Usage:
     LSTM.py --cuda=<int> train --embedding_dim=<int> --hidden_dim=<int>  [options]
-    LSTM.py decode --model=""
+    LSTM.py decode --model="" --n=<int>
 '''
 from typing import List, Tuple, Dict, Set, Union
 import torch
@@ -19,41 +15,46 @@ import time
 
 
 class LSTM(nn.Module):
-    def __init__(self, vsize, embedding_dim,hidden_dim):
+    def __init__(self, vsize, embedding_dim, hidden_dim):
         super(LSTM, self).__init__()
 
         self.embed_dim = embedding_dim
         self.vsize = vsize
         self.hidden_dim = hidden_dim
-        self.embed = nn.Embedding(self.vsize, self.embed_dim)
-        self.LN = nn.Linear(self.embed_dim + self.hidden_dim, self.embed_dim)
-        self.norm = nn.LayerNorm(self.embed_dim) # 归一化
-        self.gelu = nn.GELU() # 激活
-        self.tanh = nn.Tanh()
-        self.drop = nn.Dropout(p=0.1)  # dropout训练
-        self.classifier = nn.Linear(self.embed_dim, self.vsize)
-        self.classifier.weight = self.embed.weight  # 将Linear的weight绑定Embedding的weight
+        self.lstm = nn.Sequential(
+            nn.Linear(self.embed_dim + self.hidden_dim, self.hidden_dim * 4),
+            nn.LayerNorm((4, self.hidden_dim)),  # 归一化
+        )
+        self.net = nn.Sequential(
+            nn.Embedding(self.vsize, self.embed_dim),
+            nn.Dropout(p=0.1),  # dropout训练
+            nn.Linear(self.hidden_dim, self.vsize),
+        )
+        self.sig = nn.Sigmoid()
+        self.tanh = nn.GELU()
+        self.net[-1].weight = self.net[0].weight  # 将Linear的weight绑定Embedding的weight
 
-    def forward(self, input, hidden,cell):
+    def forward(self, input, hidden, cell):
         seql = input.size(1)
-        input = self.embed(input)  # (batch_size, seq_length, embed_dim)
+        input = self.net[0](input)  # (batch_size, seq_length, embed_dim)
         output = []
         for i in range(seql):
             data = torch.cat([input.narrow(1, i, 1), hidden], dim=-1)  # (bsize,1,embed_dim+embed_dim)
             # input gate:(batch_size, 1, embed_dim)
-            i = self.drop(self.gelu(self.norm(self.LN(data))))
-            # forget gate:(batch_size, 1, embed_dim)
-            f = self.drop(self.gelu(self.norm(self.LN(data))))
-            # cell:(batch_size, 1, embed_dim)
-            h = self.drop(self.tanh(self.norm(self.LN(data))))
-            # output gate:(batch_size, 1, embed_dim)
-            o = self.drop(self.gelu(self.norm(self.LN(data))))
-            cell = f * cell + i * h
-            hidden = o * cell
+            out = self.lstm[0](data)
+            size = list(out.size())
+            size[-1] = 4
+            size.append(32)  # size:(bsize,1,4,32)
+            i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
+            i = self.net[1](self.sig(i))  # 决定保留多少
+            f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
+            h = self.net[1](self.tanh(h))
+            o = self.net[1](self.sig(o))
+            cell = f * cell + i * h  # 输入门
+            hidden = o * cell  # 下一层隐状态
             output.append(hidden)
-        output = self.classifier(torch.cat(output, dim=1))  # (bsize,seql,vsize)
+        output = self.net[-1](torch.cat(output, dim=1))  # (bsize,seql,vsize)
         return output
-
 
     def init_hidden(self, input_x, input_y):
         return torch.nn.Parameter(torch.zeros(input_x, input_y, 32))
@@ -77,17 +78,41 @@ class LSTM(nn.Module):
         }
         torch.save(params, path)
 
-    def decode(self, input, hidden, cell):
-        input = self.embed(input)  # (1, embed_dim)
-        data = torch.cat([input, hidden], dim= 1)  # (1,embed_dim+embed_dim)
-        i = self.drop(self.gelu(self.norm(self.LN(data))))
-        f = self.drop(self.gelu(self.norm(self.LN(data))))
-        h = self.drop(self.tanh(self.norm(self.LN(data))))
-        o = self.drop(self.gelu(self.norm(self.LN(data))))
-        cell = f * cell + i * h
-        hidden = o * cell
-        out = torch.argmax(self.classifier(hidden), dim=1)  # (1)
-        return out, hidden, cell
+
+    def decode(self, input, hidden, cell,num):
+        seql = input.size(0)
+        input = self.net[0](input)  # (seql, embed_dim)
+        output = []
+        for i in range(seql):
+            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
+            out = self.lstm[0](data)
+            size = list(out.size())
+            size[-1] = 4
+            size.append(32)  # size:(bsize,1,4,32)
+            i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
+            i,f,o,h = self.net[1](self.sig(i))
+            i = self.net[1](self.sig(i))  # 决定保留多少
+            f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
+            h = self.net[1](self.tanh(h))
+            o = self.net[1](self.sig(o))
+            cell = f * cell + i * h  # 输入门
+            hidden = o * cell  # 下一层隐状态
+        for i in range(seql-1, num):
+            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
+            out = self.lstm[0](data)
+            size = list(out.size())
+            size[-1] = 4
+            size.append(32)  # size:(bsize,1,4,32)
+            i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
+            i = self.net[1](self.sig(i))  # 决定保留多少
+            f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
+            h = self.net[1](self.tanh(h))
+            o = self.net[1](self.sig(o))
+            cell = f * cell + i * h  # 输入门
+            hidden = o * cell  # 下一层隐状态
+            input = torch.cat((input, hidden.unsqueeze(0)), dim=0)
+        output = self.net[-1](input)  # (bsize,seql,vsize)
+        return output
 
 
 # 返回一个batch和对应的target
@@ -95,22 +120,21 @@ def make_target(data, ndata):
     for i in range(ndata):
         batch = data[str(i)][:]
         batch = torch.LongTensor(batch)
-        target = batch  # [bsize,seql]
-        yield batch, target  # 测试数据 正确结果
+        input = batch.narrow(1, 0, batch.shape[1] - 1)
+        target = batch.narrow(1, 1, batch.shape[1] - 1)
+        yield input, target  # 测试数据 正确结果
 
 
 def train(args: Dict):
     model_save_path = "model.LSTM"
     with h5py.File("result.hdf5", 'r') as f:
-        nword = f['nword'][()] + 1
+        nword = f['nword'][()] + 2
         ndata = f['ndata'][()]
         data = f['group']
         torch.manual_seed(0)  # 固定随机种子
 
-        model = LSTM(vsize=nword, embedding_dim=int(args['--embedding_dim']),hidden_dim=int(args['--hidden_dim']))  # 模型初始化
-        # # model = Predict(vsize = nword , hidden_size = 128, embed_size = 32,context_size = 3)  # 模型初始化
-        # model = Predict.load(model_save_path)
-        # model.eval()
+        model = LSTM(vsize=nword, embedding_dim=int(args['--embedding_dim']),
+                     hidden_dim=int(args['--hidden_dim']))  # 模型初始化
 
         model.train()
 
@@ -127,6 +151,9 @@ def train(args: Dict):
             Loss = Loss.to(device)
 
         optimizer = torch.optim.Adam(model.parameters())  # 优化函数初始化 学习率
+        # 学习率更新
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.2, patience=10,
+                                                               min_lr=1e-7)  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
 
         cuda = 0
         print('start training')
@@ -140,23 +167,26 @@ def train(args: Dict):
                 cuda += 1
                 hidden = model.init_hidden(batch.size(0), 1).to(device)
                 cell = hidden
-                out= model(batch,hidden,cell)
-                loss = Loss(out.transpose(1,2), target)
+                out = model(batch, hidden, cell)
+                loss = Loss(out.transpose(1, 2), target)
                 # backward
                 loss.backward()
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                 if cuda % 100 == 0:  # 打印loss
-                    print("This is {0} epoch,This is {1} batch".format(epoch,cuda), 'loss = ','{:.6f}'.format(loss/nword))
-                if cuda % 2000 == 0:  # 保存模型
+                    print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ', '{:.6f}'.format(loss/nword))
+                if cuda % 1000 == 0:  # 更新学习率
+                    scheduler.step(loss)
+                if cuda % 100 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
 
 def decode(args: Dict):
     model_save_path = args['--model']
-    input = ['I', 'just', 'signed', 'a', 'petition', 'calling', 'on', 'the', 'international', 'community']
+    num = int(args['--n'])
+    input = ['I', 'just', 'signed']
     with open("dict.txt", "rb") as file:  # 读数据
         words = eval(file.readline().strip().decode("utf-8"))
     words_re = {i: w for w, i in words.items()}
@@ -168,17 +198,17 @@ def decode(args: Dict):
     device = torch.device("cuda:0")  # 在cuda上运行
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
-    hidden = torch.nn.Parameter(torch.zeros(1,32)).to(device)
-    cell = torch.nn.Parameter(torch.zeros(1,32)).to(device)
+    hidden = torch.zeros(32,device=device)
+    cell = torch.zeros(32,device=device)
     result = []
     with torch.no_grad():
-        for i in range(len(input)):
-            d = torch.LongTensor([input[i]]).to(device)
-            out, hidden,cell = model.decode(d, hidden, cell)
-            result.append(out.item())
-    output = [words_re[k] for k in result]  # sentence
+        d = torch.LongTensor(input).to(device)
+        out = model.decode(d, hidden,cell, num)
+        out = torch.argmax(out, dim=-1)
+    out = out.tolist()
+    output = [words_re[k] for k in out]  # sentence
     print(output)
-    output = "".join(output).replace("@@ ", "")
+    output = " ".join(output).replace("@@ ", "")
     print(output)
 
 
