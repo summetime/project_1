@@ -1,4 +1,3 @@
-# encoding: utf-8
 # wxy
 # RNNs每次只输入一个单词，按照句子的顺序逐个输入，同时维护一个或多个hidden（RNN：1个，hidden，LSTM：2个，hidden & cell）来存储前面输入单词的信息：
 # ht = model(h_{t-1},i_t}
@@ -9,8 +8,9 @@
 
 '''Usage:
     RNN.py --cuda=<int> train --embedding_dim=<int> --hidden_dim=<int>  [options]
-    RNN.py decode --model=""
+    RNN.py decode --model="" --n=<int>
 '''
+import random
 from typing import List, Tuple, Dict, Set, Union
 import torch
 import torch.nn.functional as F
@@ -29,29 +29,29 @@ class RNN(nn.Module):
         self.vsize = vsize
         self.hidden_dim = hidden_dim
         self.embed = nn.Embedding(self.vsize, self.embed_dim)  # 构建Embedding
-        self.net = nn.Sequential(  # 封装容器(模型执行顺序)
-            nn.Linear(self.embed_dim +self.hidden_dim, 128),
+        self.net = nn.Sequential(  # 封装容器(模型执行顺序) 隐藏层
+            nn.Linear(self.embed_dim + self.hidden_dim, hidden_dim),
             nn.GELU(),  # 激活函数
-            nn.Linear(128, self.embed_dim, bias=False)
         )
-        self.classifier = nn.Linear(self.embed_dim, self.vsize)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, self.embed_dim, bias=False),
+            nn.Linear(self.embed_dim, self.vsize),
+        )
+        self.classifier[-1].weight = self.embed.weight  # 将Linear的weight绑定Embedding的weight
 
-        self.classifier.weight = self.embed.weight  # 将Linear的weight绑定Embedding的weight
-
-    def forward(self, input, hidden):
-
+    def forward(self, input,hidden):
         seql = input.size(1)
         input = self.embed(input)  # (bsize, seq_length, embed_dim)
         output = []
-        for i in range(seql):
-            data = torch.cat([input.narrow(1, i, 1), hidden], dim=-1)  # (bsize,1,embed_dim+embed_dim)
-            hidden = self.net(data)  # (bsize,1,32)
+        for i in input.unbind(1):
+            data = torch.cat([i, hidden], dim=-1)  # (bsize,embed_dim+embed_dim)
+            hidden = self.net(data)  # (bsize,32)
             output.append(hidden)
-        output = self.classifier(torch.cat(output,dim=1)) #(bsize,seql,vsize)
+        output = self.classifier(torch.stack(output,dim=1)) #(bsize,seql,vsize)
         return output
 
     def init_hidden(self, input_x, input_y):
-        return torch.nn.Parameter(torch.zeros(input_x, input_y, 32))
+        return torch.nn.Parameter(torch.zeros(input_x, input_y))
 
 
     @staticmethod
@@ -73,22 +73,32 @@ class RNN(nn.Module):
         }
         torch.save(params, path)
 
-    def decode(self, input, hidden):
-
-        input = self.embed(input)  # (1, embed_dim)
-        data = torch.cat([input,hidden],dim=1)  # (1,embed_dim+embed_dim)
-        hidden = self.net(data)
-        out = torch.argmax(self.classifier(hidden), dim=1) # (1)
-        return out,hidden
+    def decode(self, input, hidden,n):
+        seql = input.size(0) #(seql)
+        input = self.embed(input)  # (seql, embed_dim)
+        output = []
+        for i in range(seql):
+            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
+            hidden = self.net(data)  # (32)
+        for i in range(seql-1,n):
+            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
+            hidden = self.net(data)  # (32)
+            # print('input:',input.size(),'hidden:',hidden.size())
+            input = torch.cat((input, hidden.unsqueeze(0)),dim=0)
+        output = self.classifier(input)  # (1,seql,vsize)
+        return output
 
 
 # 返回一个batch和对应的target
 def make_target(data, ndata):
-    for i in range(ndata):
+    l = list(range(ndata))
+    random.shuffle(l)
+    for i in l:
         batch = data[str(i)][:]
         batch = torch.LongTensor(batch)
-        target = batch  # [bsize,seql]
-        yield batch, target  # 测试数据 正确结果
+        input = batch.narrow(1, 0, batch.size(1)-1)
+        target = batch.narrow(1, 1, batch.size(1)-1)
+        yield input, target  # 测试数据 正确结果
 
 
 def train(args: Dict):
@@ -100,9 +110,6 @@ def train(args: Dict):
         torch.manual_seed(0)  # 固定随机种子
 
         model = RNN(vsize=nword, embedding_dim=int(args['--embedding_dim']),hidden_dim=int(args['--hidden_dim']))  # 模型初始化
-        # # model = Predict(vsize = nword , hidden_size = 128, embed_size = 32,context_size = 3)  # 模型初始化
-        # model = Predict.load(model_save_path)
-        # model.eval()
 
         model.train()
 
@@ -119,6 +126,12 @@ def train(args: Dict):
             Loss = Loss.to(device)
 
         optimizer = torch.optim.Adam(model.parameters())  # 优化函数初始化 学习率
+
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=1000, gamma=0.1)
+
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.2, patience=10,
+                                                               min_lr=1e-7)  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
+
         cuda = 0
         print('start training')
         for epoch in range(20):
@@ -129,10 +142,9 @@ def train(args: Dict):
                     target = target.to(device)
                 # forward
                 cuda += 1
-                hidden = model.init_hidden(batch.size(0), 1).to(device)
+                hidden = model.init_hidden(batch.size(0), 32).to(device)
                 out = model(batch,hidden)
-                out = out.transpose(1,2)
-                loss = Loss(out, target)
+                loss = Loss(out.transpose(1,2), target)
                 # backward
                 loss.backward()
                 if cuda % 10 == 0:
@@ -140,14 +152,17 @@ def train(args: Dict):
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                 if cuda % 100 == 0:  # 打印loss
                     print("This is {0} epoch,This is {1} batch".format(epoch,cuda), 'loss = ','{:.6f}'.format(loss/nword))
-                if cuda % 2000 == 0:  # 保存模型
+                if cuda % 1000 == 0:  # 更新学习率
+                    scheduler.step(loss)
+                if cuda % 100 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
 
 def decode(args: Dict):
     model_save_path = args['--model']
-    input = ['I', 'just', 'signed','a','petition','calling','on','the','international','community']
+    num =int(args['--n'])
+    input = ['how', 'are', 'you']
     with open("dict.txt", "rb") as file:  # 读数据
         words = eval(file.readline().strip().decode("utf-8"))
     words_re = {i: w for w, i in words.items()}
@@ -159,17 +174,17 @@ def decode(args: Dict):
     device = torch.device("cuda:0")  # 在cuda上运行
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
-    hidden = torch.nn.Parameter(torch.zeros(1,32)).to(device)
+    hidden = torch.zeros(32).to(device)
     result = []
     with torch.no_grad():
         # d = torch.LongTensor(input).to(device)
-        for i in range(len(input)):
-            d = torch.LongTensor([input[i]]).to(device)
-            out,hidden = model.decode(d,hidden)
-            result.append(out.item())
-    output = [words_re[k] for k in result]  # sentence
+        d = torch.LongTensor(input).to(device)
+        out = model.decode(d,hidden,num)
+        out = torch.argmax(out,dim=-1)
+    out = out.tolist()
+    output = [words_re[k] for k in out]  # sentence
     print(output)
-    output = " ".join(output).replace("@@ ","")
+    output = " ".join(output).replace("@@ "," ")
     print(output)
 
 
