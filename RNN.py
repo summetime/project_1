@@ -8,7 +8,7 @@
 
 '''Usage:
     RNN.py --cuda=<int> train --embedding_dim=<int> --hidden_dim=<int>  [options]
-    RNN.py decode --model="" --n=<int>
+    RNN.py --cuda=<int> decode --model="" --n=<int>
 '''
 import random
 from typing import List, Tuple, Dict, Set, Union
@@ -154,7 +154,7 @@ def train(args: Dict):
                     print("This is {0} epoch,This is {1} batch".format(epoch,cuda), 'loss = ','{:.6f}'.format(loss/nword))
                 if cuda % 1000 == 0:  # 更新学习率
                     scheduler.step(loss)
-                if cuda % 100 == 0:  # 保存模型
+                if cuda % 1000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
@@ -171,7 +171,8 @@ def decode(args: Dict):
     model = RNN.load(model_save_path)
     model.eval()
 
-    device = torch.device("cuda:0")  # 在cuda上运行
+    # device = torch.device("cuda:0")  # 在cuda上运行
+    device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
     hidden = torch.zeros(32).to(device)
