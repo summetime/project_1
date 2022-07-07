@@ -2,7 +2,7 @@
 
 '''Usage:
     LSTM.py --cuda=<int> train --embedding_dim=<int> --hidden_dim=<int>  [options]
-    LSTM.py decode --model="" --n=<int>
+    LSTM.py --cuda=<int> decode --model="" --n=<int>
 '''
 from typing import List, Tuple, Dict, Set, Union
 import torch
@@ -195,7 +195,8 @@ def decode(args: Dict):
     model = LSTM.load(model_save_path)
     model.eval()
 
-    device = torch.device("cuda:0")  # 在cuda上运行
+    # device = torch.device("cuda:0")  # 在cuda上运行
+    device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
     hidden = torch.zeros(32,device=device)
