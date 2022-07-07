@@ -90,7 +90,6 @@ class LSTM(nn.Module):
             size[-1] = 4
             size.append(32)  # size:(bsize,1,4,32)
             i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
-            i,f,o,h = self.net[1](self.sig(i))
             i = self.net[1](self.sig(i))  # 决定保留多少
             f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
             h = self.net[1](self.tanh(h))
@@ -178,7 +177,7 @@ def train(args: Dict):
                     print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ', '{:.6f}'.format(loss/nword))
                 if cuda % 1000 == 0:  # 更新学习率
                     scheduler.step(loss)
-                if cuda % 100 == 0:  # 保存模型
+                if cuda % 1000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
