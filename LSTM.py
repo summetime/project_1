@@ -4,6 +4,7 @@
     LSTM.py --cuda=<int> train --embedding_dim=<int> --hidden_dim=<int>  [options]
     LSTM.py --cuda=<int> decode --model="" --n=<int>
 '''
+import random
 from typing import List, Tuple, Dict, Set, Union
 import torch
 import torch.nn.functional as F
@@ -14,6 +15,31 @@ from docopt import docopt
 import time
 
 
+class LSTMCell(nn.Module):
+    def __init__(self,embedding_dim, hidden_dim):
+        super(LSTMCell, self).__init__()
+        self.lstm = nn.Sequential(
+            nn.Linear(embedding_dim + hidden_dim, hidden_dim * 4),
+            nn.LayerNorm((4, hidden_dim)),  # 归一化
+        )
+        self.sig = nn.Sigmoid()  # 激活函数
+        self.tanh = nn.Tanh()
+        self.drop = nn.Dropout(p=0.1)  # dropout
+
+    def forward(self, data, hidden, cell):
+        out = self.lstm[0](data)
+        size = list(out.size())
+        size[-1] = 4
+        size.append(32)  # size:(bsize,1,4,32)
+        i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
+        i = self.drop(self.sig(i))  # 决定保留多少
+        f = self.drop(self.sig(f))  # 遗忘门 决定丢弃多少
+        h = self.drop(self.tanh(h))
+        o = self.drop(self.sig(o))
+        cell = f * cell + i * h  # 输入门
+        hidden = o * cell  # 下一层隐状态
+        return hidden, cell
+
 class LSTM(nn.Module):
     def __init__(self, vsize, embedding_dim, hidden_dim):
         super(LSTM, self).__init__()
@@ -21,43 +47,49 @@ class LSTM(nn.Module):
         self.embed_dim = embedding_dim
         self.vsize = vsize
         self.hidden_dim = hidden_dim
-        self.lstm = nn.Sequential(
-            nn.Linear(self.embed_dim + self.hidden_dim, self.hidden_dim * 4),
-            nn.LayerNorm((4, self.hidden_dim)),  # 归一化
-        )
-        self.net = nn.Sequential(
-            nn.Embedding(self.vsize, self.embed_dim),
-            nn.Dropout(p=0.1),  # dropout训练
-            nn.Linear(self.hidden_dim, self.vsize),
-        )
-        self.sig = nn.Sigmoid()
-        self.tanh = nn.GELU()
-        self.net[-1].weight = self.net[0].weight  # 将Linear的weight绑定Embedding的weight
+        self.embed = nn.Embedding(self.vsize, self.embed_dim) # 生成词向量embed
+
+        self.lstm = LSTMCell(embedding_dim=embedding_dim,hidden_dim=hidden_dim) # lstm计算
+
+        self.classifier = nn.Sequential(nn.Linear(self.hidden_dim,self.embed_dim,bias=False),
+                                            nn.Linear(self.embed_dim, self.vsize),) if embedding_dim == hidden_dim else nn.Linear(self.embed_dim, self.vsize)
+
+        if embedding_dim == hidden_dim:
+            self.classifier.weight = self.embed.weight
+        else:
+            self.classifier[-1].weight = self.embed.weight  # 将Linear的weight绑定Embedding的weight
+
 
     def forward(self, input, hidden, cell):
         seql = input.size(1)
-        input = self.net[0](input)  # (batch_size, seq_length, embed_dim)
+        input = self.embed(input)  # (batch_size, seq_length, embed_dim)
         output = []
-        for i in range(seql):
-            data = torch.cat([input.narrow(1, i, 1), hidden], dim=-1)  # (bsize,1,embed_dim+embed_dim)
-            # input gate:(batch_size, 1, embed_dim)
-            out = self.lstm[0](data)
-            size = list(out.size())
-            size[-1] = 4
-            size.append(32)  # size:(bsize,1,4,32)
-            i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
-            i = self.net[1](self.sig(i))  # 决定保留多少
-            f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
-            h = self.net[1](self.tanh(h))
-            o = self.net[1](self.sig(o))
-            cell = f * cell + i * h  # 输入门
-            hidden = o * cell  # 下一层隐状态
+        for i in input.unbind(1):
+            data = torch.cat([i,hidden],dim=-1)
+            hidden ,cell = self.lstm(data,hidden,cell)
             output.append(hidden)
-        output = self.net[-1](torch.cat(output, dim=1))  # (bsize,seql,vsize)
+        output = self.classifier(torch.stack(output,dim=1))  # (bsize,seql,vsize)
         return output
 
+
     def init_hidden(self, input_x, input_y):
-        return torch.nn.Parameter(torch.zeros(input_x, input_y, 32))
+        return torch.nn.Parameter(torch.zeros(input_x, input_y))
+
+    def decode(self, input, hidden, cell, num):
+        seql = input.size(0)
+        input = self.embed(input)  # (seql, embed_dim)
+        output = []
+        for i in range(seql):
+            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
+            hidden ,cell = self.lstm(data, hidden, cell)
+        for i in range(seql - 1, num):
+            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
+            hidden ,cell = self.lstm(data, hidden, cell)
+            out = torch.argmax(self.classifier((hidden)), dim=-1)
+            output.append(out.item())
+            input = torch.cat((input, self.embed(out.unsqueeze(0))), dim=0)
+        # output = self.classifier(input)  # (bsize,seql,vsize)
+        return output
 
     @staticmethod
     def load(model_path: str):
@@ -79,48 +111,15 @@ class LSTM(nn.Module):
         torch.save(params, path)
 
 
-    def decode(self, input, hidden, cell,num):
-        seql = input.size(0)
-        input = self.net[0](input)  # (seql, embed_dim)
-        output = []
-        for i in range(seql):
-            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
-            out = self.lstm[0](data)
-            size = list(out.size())
-            size[-1] = 4
-            size.append(32)  # size:(bsize,1,4,32)
-            i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
-            i = self.net[1](self.sig(i))  # 决定保留多少
-            f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
-            h = self.net[1](self.tanh(h))
-            o = self.net[1](self.sig(o))
-            cell = f * cell + i * h  # 输入门
-            hidden = o * cell  # 下一层隐状态
-        for i in range(seql-1, num):
-            data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
-            out = self.lstm[0](data)
-            size = list(out.size())
-            size[-1] = 4
-            size.append(32)  # size:(bsize,1,4,32)
-            i, f, h, o = self.lstm[1](out.view(size)).unbind(-2)
-            i = self.net[1](self.sig(i))  # 决定保留多少
-            f = self.net[1](self.sig(f))  # 遗忘门 决定丢弃多少
-            h = self.net[1](self.tanh(h))
-            o = self.net[1](self.sig(o))
-            cell = f * cell + i * h  # 输入门
-            hidden = o * cell  # 下一层隐状态
-            input = torch.cat((input, hidden.unsqueeze(0)), dim=0)
-        output = self.net[-1](input)  # (bsize,seql,vsize)
-        return output
-
-
 # 返回一个batch和对应的target
 def make_target(data, ndata):
-    for i in range(ndata):
+    l = list(range(ndata))
+    random.shuffle(l)
+    for i in l:
         batch = data[str(i)][:]
         batch = torch.LongTensor(batch)
-        input = batch.narrow(1, 0, batch.shape[1] - 1)
-        target = batch.narrow(1, 1, batch.shape[1] - 1)
+        input = batch.narrow(1, 0, batch.size(1) - 1)
+        target = batch.narrow(1, 1, batch.size(1) - 1)
         yield input, target  # 测试数据 正确结果
 
 
@@ -140,7 +139,7 @@ def train(args: Dict):
         for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
             torch.nn.init.uniform_(param, a=-0.001, b=0.001)  # 给weight初始化
 
-        device = torch.device("cuda:0" if args['--cuda'] else "cpu")  # 分配设备
+        device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
 
         print('use device: %s' % device, file=sys.stderr)
         if args['--cuda']:
@@ -164,7 +163,7 @@ def train(args: Dict):
                     target = target.to(device)
                 # forward
                 cuda += 1
-                hidden = model.init_hidden(batch.size(0), 1).to(device)
+                hidden = model.init_hidden(batch.size(0), 32).to(device)
                 cell = hidden
                 out = model(batch, hidden, cell)
                 loss = Loss(out.transpose(1, 2), target)
@@ -174,10 +173,11 @@ def train(args: Dict):
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                 if cuda % 100 == 0:  # 打印loss
-                    print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ', '{:.6f}'.format(loss/nword))
+                    print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ',
+                          '{:.6f}'.format(loss / nword))
                 if cuda % 1000 == 0:  # 更新学习率
                     scheduler.step(loss)
-                if cuda % 1000 == 0:  # 保存模型
+                if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
@@ -194,21 +194,17 @@ def decode(args: Dict):
     model = LSTM.load(model_save_path)
     model.eval()
 
-    # device = torch.device("cuda:0")  # 在cuda上运行
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
-    hidden = torch.zeros(32,device=device)
-    cell = torch.zeros(32,device=device)
+    hidden = torch.zeros(32, device=device)
+    cell = torch.zeros(32, device=device)
     result = []
     with torch.no_grad():
         d = torch.LongTensor(input).to(device)
-        out = model.decode(d, hidden,cell, num)
-        out = torch.argmax(out, dim=-1)
-    out = out.tolist()
+        out = model.decode(d, hidden, cell, num)
     output = [words_re[k] for k in out]  # sentence
-    print(output)
-    output = " ".join(output).replace("@@ ", "")
+    output = " ".join(output).replace("@@ "," ")
     print(output)
 
 

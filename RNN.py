@@ -21,6 +21,19 @@ from docopt import docopt
 import time
 
 
+class RNNCell(nn.Module):
+    def __init__(self,embedding_dim, hidden_dim):
+        super(RNNCell, self).__init__()
+        self.rnn = nn.Sequential(  # 封装容器(模型执行顺序) 隐藏层
+            nn.Linear(embedding_dim + hidden_dim, hidden_dim),
+            nn.GELU(),  # 激活函数
+        )
+
+    def forward(self, data):
+        hidden = self.rnn(data)  # (bsize,embed_dim+embed_dim)
+        return hidden
+
+
 class RNN(nn.Module):
     def __init__(self, vsize, embedding_dim,hidden_dim):
         super(RNN, self).__init__()
@@ -29,19 +42,20 @@ class RNN(nn.Module):
         self.vsize = vsize
         self.hidden_dim = hidden_dim
         self.embed = nn.Embedding(self.vsize, self.embed_dim)  # 构建Embedding
-        self.net = nn.Sequential(  # 封装容器(模型执行顺序) 隐藏层
-            nn.Linear(self.embed_dim + self.hidden_dim, hidden_dim),
-            nn.GELU(),  # 激活函数
-        )
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, self.embed_dim, bias=False),
-            nn.Linear(self.embed_dim, self.vsize),
-        )
-        self.classifier[-1].weight = self.embed.weight  # 将Linear的weight绑定Embedding的weight
+
+        self.net = RNNCell(embedding_dim=self.embed_dim, hidden_dim=self.hidden_dim)
+
+        self.classifier = nn.Sequential(nn.Linear(self.hidden_dim, self.embed_dim, bias=False),
+                                        nn.Linear(self.embed_dim,self.vsize), ) \
+            if embedding_dim == hidden_dim else nn.Linear(self.embed_dim, self.vsize)
+
+        if embedding_dim == hidden_dim:
+            self.classifier.weight = self.embed.weight # 将Linear的weight绑定Embedding的weight
+        else:
+            self.classifier[-1].weight = self.embed.weight  # 将Linear的weight绑定Embedding的weight
 
     def forward(self, input,hidden):
-        seql = input.size(1)
-        input = self.embed(input)  # (bsize, seq_length, embed_dim)
+        input = self.embed(input)  # (bsize, seq_length,embed_dim)
         output = []
         for i in input.unbind(1):
             data = torch.cat([i, hidden], dim=-1)  # (bsize,embed_dim+embed_dim)
@@ -75,7 +89,7 @@ class RNN(nn.Module):
 
     def decode(self, input, hidden,n):
         seql = input.size(0) #(seql)
-        input = self.embed(input)  # (seql, embed_dim)
+        input = self.embed(input)  # (1,seql, embed_dim)
         output = []
         for i in range(seql):
             data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
@@ -83,9 +97,9 @@ class RNN(nn.Module):
         for i in range(seql-1,n):
             data = torch.cat([input[i], hidden], dim=-1)  # (embed_dim+embed_dim)
             hidden = self.net(data)  # (32)
-            # print('input:',input.size(),'hidden:',hidden.size())
-            input = torch.cat((input, hidden.unsqueeze(0)),dim=0)
-        output = self.classifier(input)  # (1,seql,vsize)
+            out = torch.argmax(self.classifier(hidden),dim=-1)
+            output.append(out.item())
+            input = torch.cat([input, self.embed(out.unsqueeze(0))],dim=0)
         return output
 
 
@@ -104,7 +118,7 @@ def make_target(data, ndata):
 def train(args: Dict):
     model_save_path = "model.RNN"
     with h5py.File("result.hdf5", 'r') as f:
-        nword = f['nword'][()] + 1
+        nword = f['nword'][()] + 2
         ndata = f['ndata'][()]
         data = f['group']
         torch.manual_seed(0)  # 固定随机种子
@@ -116,7 +130,7 @@ def train(args: Dict):
         for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
             torch.nn.init.uniform_(param, a=-0.001, b=0.001)  # 给weight初始化
 
-        device = torch.device("cuda:0" if args['--cuda'] else "cpu")  # 分配设备
+        device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
 
         print('use device: %s' % device, file=sys.stderr)
         if args['--cuda']:
@@ -142,7 +156,7 @@ def train(args: Dict):
                     target = target.to(device)
                 # forward
                 cuda += 1
-                hidden = model.init_hidden(batch.size(0), 32).to(device)
+                hidden = model.init_hidden(batch.size(0), 32).to(device) #初始化隐藏层
                 out = model(batch,hidden)
                 loss = Loss(out.transpose(1,2), target)
                 # backward
@@ -154,7 +168,7 @@ def train(args: Dict):
                     print("This is {0} epoch,This is {1} batch".format(epoch,cuda), 'loss = ','{:.6f}'.format(loss/nword))
                 if cuda % 1000 == 0:  # 更新学习率
                     scheduler.step(loss)
-                if cuda % 1000 == 0:  # 保存模型
+                if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
@@ -171,20 +185,15 @@ def decode(args: Dict):
     model = RNN.load(model_save_path)
     model.eval()
 
-    # device = torch.device("cuda:0")  # 在cuda上运行
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
     hidden = torch.zeros(32).to(device)
     result = []
     with torch.no_grad():
-        # d = torch.LongTensor(input).to(device)
         d = torch.LongTensor(input).to(device)
         out = model.decode(d,hidden,num)
-        out = torch.argmax(out,dim=-1)
-    out = out.tolist()
     output = [words_re[k] for k in out]  # sentence
-    print(output)
     output = " ".join(output).replace("@@ "," ")
     print(output)
 
