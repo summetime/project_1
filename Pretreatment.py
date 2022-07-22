@@ -27,9 +27,9 @@ def getText():
 # subword-nmt apply-bpe -c D:\pythonProject\week_6\codes_file.txt --vocabulary  D:\pythonProject\week_6\vocab_file.txt --vocabulary-threshold 10 --input D:\pythonProject\week_6\test.txt --output D:\pythonProject\week_6\train_file_BPE.txt
 
 # BPE处理完之后对数据集进行排序，使相似长度的句子聚合在一起（长度低于3或长于256的丢弃，因为下周的具体任务和内存限制），同一长度的句子通过random包的shuffle方法做一次顺序打乱
-def Sort():
+def Sort(filename1,filename2):
     lines = {}  # 按照句子长度存储
-    with open("train_file_BPE.txt", "r", encoding='utf-8') as file:
+    with open(filename1, "r", encoding='utf-8') as file:
         for line in file:
             temp = line.strip()  # 统计词长
             l = len(temp.split())
@@ -43,21 +43,19 @@ def Sort():
         if len(line) > 1:
             random.shuffle(line) #打乱顺序
 
-    # 存储排序好的字典
-    with open("train_file_BPE_sort.txt", "w", encoding="utf-8") as file:
+    # 存储排序好的文件
+    with open(filename2, "w", encoding="utf-8") as file:
         for i in sorted(lines, reverse=True):  # 从高到低存储
             file.write('\n'.join(lines[i]))
             file.write('\n')
-            # for j in lines[i]:
-            #     file.write(str(j))
 
 
 
 # 4、词频统计：收集数据集上的词典，建立单词到索引的一对一映射并保存结果，（0索引对应padding，其它单词的索引从1开始累加，单词顺序从高频到低频）；
-def handle_1():
+def handle_1(filename1,filename2):
     temp_words = {}
 
-    with open("train_file_BPE_sort.txt", "r", encoding="utf-8") as file:
+    with open(filename1, "r", encoding="utf-8") as file:
         for line in file:
             temp = line.strip()
             if temp:
@@ -65,12 +63,12 @@ def handle_1():
                     temp_words[word] = temp_words.get(word, 0) + 1  # 统计词频
     # words["<pad>"] = 0
     # i = 1
-    words = {word:i for i,word in enumerate(sorted(temp_words, reverse=True),0)}
-    with open("dict.txt",'wb') as file:
+    words = {word: i for i, word in enumerate(sorted(temp_words, reverse=True), 0)}
+    # for i, word in enumerate(sorted(temp_words, reverse=True), 1):  # 按照高频到低频存储
+    #     words[word] = i
+    #     i += 1
+    with open(filename2, 'wb') as file:
         file.write(repr(words).encode("utf-8"))
-    for i,word in enumerate(sorted(temp_words, reverse=True),1):  # 按照高频到低频存储
-        words[word] = i
-        # i += 1
     return words
 
 
@@ -117,7 +115,7 @@ def save(datas, file, f5):
 
 if __name__ == "__main__":
     # getText()
-    Sort()
-    words = handle_1()
-    with open("train_file_BPE_sort.txt", 'r', encoding="utf-8") as file, h5py.File("result.hdf5", 'w') as f5:
+    Sort(sys.argv[1],sys.argv[2])  #BPE BPE_sort
+    words = handle_1(sys.argv[2],sys.argv[3]) #BPE_sort dict result
+    with open(sys.argv[2], 'r', encoding="utf-8") as file, h5py.File(sys.argv[4], 'w') as f5:
         save(words, file, f5)
