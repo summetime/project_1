@@ -3,6 +3,7 @@ import random
 import h5py
 import numpy as np
 import torch
+import sys
 
 
 # 1、BPE之前先把长度超过128个token的句子丢掉
