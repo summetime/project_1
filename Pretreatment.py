@@ -76,47 +76,61 @@ def handle_1(filename1,filename2):
 # 5、根据词典索引，将排序后的数据切分为batch（每个batch包含的token数量尽可能多，但不要超过2560个token）并转换为tensor（为matrix，batch size * seql,
 # batch size: 这个batch中包含几个句子，seql: 这些句子中最长句子的长度（短句使用padding，映射索引为0，填充到相同长度）），
 
-def handle_2(datas, file):
+def handle_2(words_en, file_en,words_de, file_de):
     index = 0
-    batch = []
+    batch_en = []
+    batch_de = []
     matrix_line = 1  # 目前矩阵有几行
     batch_flag = True  # 是否开始下一个batch
-    for line in file:
-        tmp = line.strip()
-        if tmp:
-            tmp = tmp.split()
+    for line_en,line_de in zip(file_en,file_de):
+        tmp_en = line_en.strip()
+        tmp_de = line_de.strip()
+        if tmp_en and tmp_de:
+            tmp_en = tmp_en.split()
+            tmp_de = tmp_de.split()
             if batch_flag:  # 找出当前batch的大小
-                seql = len(tmp) # 词长
-                batch_size = int(2560 / len(tmp)) # 行数
-                batch = []  # 创建一个batch
+                seql = max(len(tmp_en),len(tmp_de)) # 词长
+                batch_size = int(2560 / seql) # 行数
+                batch_en = []  # 创建一个batch
+                batch_de = []
                 batch_flag = False
             if matrix_line < batch_size:
                 matrix_line += 1
-                batch.append([datas.get(w, 1) for w in tmp] + [0 for _ in range(seql - len(tmp))])  # 把当前行的数据存入batch
+                batch_en.append([words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
+                batch_de.append([words_de.get(w, 1) for w in tmp_de] + [0 for _ in range(seql - len(tmp_de))])  # 把当前行的数据存入batch
             else:  # 当前batch已经存储好 开始寻找下一个batch
                 batch_flag = True
                 matrix_line = 1
-                yield batch,index
+                yield batch_en,batch_de,index
                 index += 1
-    if batch:
-        yield batch,index
+    if batch_de and batch_en:
+        yield batch_en,batch_de,index
 
 
 # 按hdf5格式存入文件。需要学会yield语法（生成器）的使用。HDF5存储格式：src(一个group)/<k, v>：存转换后的数据，k为数据的索引，从0自增，v为具体数据张量；
 # ndata:一个只有一个元素的向量，存src中数据的数量；nword:一个只有一个元素的向量，存第3步收集的词典大小。
-def save(datas, file, f5):
-    group = f5.create_group("group")
+def save(words_en, file_en, f5_en,words_de, file_de, f5_de):
+    group_en = f5_en.create_group("group")
+    group_de = f5_de.create_group("group")
     index = 0
-    for batch,index in handle_2(datas, file):
-        matrix_array = np.array(batch, dtype=np.int32) #将batch转成numpy类型存储
-        group.create_dataset(str(index), data=matrix_array)
-    f5["ndata"] = np.array(index, dtype=np.int32)
-    f5["nword"] = np.array(len(datas), dtype=np.int32)
+    for batch_en,batch_de,index in handle_2(words_en, file_en,words_de, file_de):
+        matrix_array_en = np.array(batch_en, dtype=np.int32) #将batch转成numpy类型存储
+        group_en.create_dataset(str(index), data=matrix_array)
+        matrix_array_de = np.array(batch_de, dtype=np.int32)  # 将batch转成numpy类型存储
+        group_de.create_dataset(str(index), data=matrix_array)
+    f5_en["ndata"] = np.array(index, dtype=np.int32)
+    f5_en["nword"] = np.array(len(words_en), dtype=np.int32)
+    f5_de["ndata"] = np.array(index, dtype=np.int32)
+    f5_de["nword"] = np.array(len(words_de), dtype=np.int32)
 
 
 if __name__ == "__main__":
     # getText()
-    Sort(sys.argv[1],sys.argv[2])  #BPE BPE_sort
-    words = handle_1(sys.argv[2],sys.argv[3]) #BPE_sort dict result
-    with open(sys.argv[2], 'r', encoding="utf-8") as file, h5py.File(sys.argv[4], 'w') as f5:
-        save(words, file, f5)
+    Sort(sys.argv[1],sys.argv[2])  #BPE BPE_sort en
+    Sort(sys.argv[3], sys.argv[4])  # BPE BPE_sort de
+    words_en = handle_1(sys.argv[2],sys.argv[5]) # BPE_sort dict  en
+    words_de = handle_1(sys.argv[4],sys.argv[6]) # BPE_sort dict  de
+    with open(sys.argv[2], 'r', encoding="utf-8") as file_en, open(sys.argv[4], 'r', encoding="utf-8") as file_de,h5py.File(sys.argv[7], 'w') as f5_en,h5py.File(sys.argv[8], 'w') as f5_de: #result
+        save(words_en, file_en, f5_en,words_de, file_de, f5_de)
+
+# python Pretreatment.py co_BPE_en.txt co_BPE_sort_en.txt co_BPE_de.txt co_BPE_sort_de.txt dict_en.txt dict_de.txt result_en.hdf5 result_de.hdf5
