@@ -15,11 +15,12 @@ from docopt import docopt
 import time
 import math
 
+
 class ScaledDotProductAttention(nn.Module):
     def __init__(self):
         super(ScaledDotProductAttention, self).__init__()
 
-    def forward(self, Q, K, V, d_k, mask,dropout=None):
+    def forward(self, Q, K, V, d_k, mask, dropout=None):
         """
         Q: [batch_size, n_heads, len_q, d_k]
         K: [batch_size, n_heads, len_k, d_k]
@@ -30,24 +31,25 @@ class ScaledDotProductAttention(nn.Module):
         # mask矩阵填充scores（用-1e9填充s中与attn_mask中值为1位置相对应的元素）
         # mask掉那些为了padding长度增加的token，让其通过softmax计算后为0
         if mask is not None:
-            mask = mask.unsqueeze(1)
             s = s.masked_fill(mask == 0, -1e9)
 
-        p = F.softmax(s, dim=-1) # 对最后一个维度(v)做softmax
+        p = F.softmax(s, dim=-1)  # 对最后一个维度(v)做softmax
         # s : [batch_size, n_heads, len_q, len_k] * V: [batch_size, n_heads, len_v(=len_k), d_v]
         output = torch.matmul(p, V)  # output: [batch_size, n_heads, len_q, d_v]
         # output：[[z1,z2,...],[...]]向量, p注意力稀疏矩阵（用于可视化的）
         if dropout is not None:
             s = dropout(s)
 
-        return output,mask
+        return output, mask
+
 
 class FeedForward(nn.Module):
 
-    def __init__(self, embedding_dim, d_ff=2048, dropout=0.1):
+    def __init__(self, embedding_dim,device, d_ff=2048, dropout=0.1):
         super().__init__()
 
         self.embed = embedding_dim
+        self.device = device
 
         # We set d_ff as a default to 2048
         self.net = nn.Sequential(
@@ -59,21 +61,20 @@ class FeedForward(nn.Module):
 
     def forward(self, input):
         residual = input
-        print('r:',residual.size())
+        print('r:', residual.size())
         output = self.net(input)
-        print('o:',output.size())
+        print('o:', output.size())
         # return nn.LayerNorm(d_model).to(device)(output + residual)
         # n = nn.LayerNorm(self.embed)
         # output = n(output + residual)
-        return  nn.LayerNorm(self.embed)(output + residual)  # [bsize, seql, embedding_dim]
-
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
     def __init__(self):
         super(Mask, self).__init__()
 
-    def en_mask(self,seq_q, seq_k):
+    def en_mask(self, seq_q, seq_k):
         # pad mask的作用：在对value向量加权平均的时候，可以让pad对应的alpha_ij=0，这样注意力就不会考虑到pad向量
         """这里的q,k表示的是两个序列（跟注意力机制的q,k没有关系），例如encoder_inputs (x1,x2,..xm)和encoder_inputs (x1,x2..xm)
         encoder和decoder都可能调用这个函数，所以seq_len视情况而定
@@ -89,7 +90,7 @@ class Mask():
         mask = seq_k.data.eq(0).unsqueeze(1)  # [batch_size, 1, len_k], True is masked
         return mask.expand(bsize, len_q, len_k)  # [batch_size, len_q, len_k] 构成一个立方体(batch_size个这样的矩阵)
 
-    def de_mask(self,seq):
+    def de_mask(self, seq):
         """建议打印出来看看是什么的输出（一目了然）
         seq: [batch_size, tgt_len]
         """
@@ -99,14 +100,16 @@ class Mask():
         subsequence_mask = torch.from_numpy(subsequence_mask).byte()
         return subsequence_mask  # [batch_size, tgt_len, tgt_len]
 
+
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self, heads, embedding_dim, dropout=0.1):
+    def __init__(self, heads, embedding_dim, device,dropout=0.1):
         super().__init__()
 
-        self.embed = embedding_dim   # 512
+        self.embed = embedding_dim  # 512
         self.d_k = embedding_dim // heads  # 512 / 8
         self.h = heads  # 8
+        self.device = device
 
         self.q_linear = nn.Linear(embedding_dim, embedding_dim)
         self.v_linear = nn.Linear(embedding_dim, embedding_dim)
@@ -120,54 +123,58 @@ class MultiHeadAttention(nn.Module):
         residual, bsize = q, q.size(0)
         # q:[bsize,nquery,embedding_dim] k:[bsize,sqel,embedding_dim] q:[bsize,sqel,embedding_dim]
         # perform linear operation and split into N heads
-        k = self.k_linear(k).view(bsize, -1, self.h, self.d_k).transpose(1, 2) # [bsize,nquery,heads,embedding_dim/8] → [bsize,heads,nquery,embedding_dim/8]
-        q = self.q_linear(q).view(bsize, -1, self.h, self.d_k).transpose(1, 2) # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
-        v = self.v_linear(v).view(bsize, -1, self.h, self.d_k).transpose(1, 2) # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
+        k = self.k_linear(k).view(bsize, -1, self.h, self.d_k).transpose(1,
+                                                                         2)  # [bsize,nquery,heads,embedding_dim/8] → [bsize,heads,nquery,embedding_dim/8]
+        q = self.q_linear(q).view(bsize, -1, self.h, self.d_k).transpose(1,
+                                                                         2)  # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
+        v = self.v_linear(v).view(bsize, -1, self.h, self.d_k).transpose(1,
+                                                                         2)  # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
         # 因为是多头，所以mask矩阵要扩充成4维的
         # mask: [bsize, seql, seql] -> [bsize,n_heads, seql, seql]
         mask = mask.unsqueeze(1).repeat(1, self.h, 1, 1)
 
         # calculate attention using function we will define next
-        ss ,mask= self.attention(q, k, v, self.d_k, mask, self.dropout)
+        ss, mask = self.attention(q, k, v, self.d_k, mask, self.dropout)
         # concatenate heads and put through final linear layer
-        concat = ss.transpose(1, 2).contiguous().view(bsize , -1, self.embed)
+        concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.embed)
         output = self.out(concat)
         # n = nn.LayerNorm(self.embed)
         # output = n(output+residual)
 
-        return nn.LayerNorm(self.embed)(output + residual),mask
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual), mask
+
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, embedding_dim, dropout=0.1, max_len=5000):
+    def __init__(self, embedding_dim,dropout=0.1, max_len=5000):
         super(PositionalEncoding, self).__init__()
 
         self.dropout = nn.Dropout(p=dropout)
 
-        pe = torch.zeros(max_len, embedding_dim) # 位置编码矩阵，维度[max_len, embedding_dim]
-        position = torch.arange(0.0, max_len).unsqueeze_(1) # 单词位置
+        pe = torch.zeros(max_len, embedding_dim)  # 位置编码矩阵，维度[max_len, embedding_dim]
+        position = torch.arange(0.0, max_len).unsqueeze_(1)  # 单词位置
 
         div_term = torch.exp(torch.arange(0.0, embedding_dim, 2) * (- math.log(1e4) / embedding_dim))  # 使用exp和log实现幂运算
         div_term.unsqueeze_(0)
-        pe[:, 0 : : 2] = torch.sin(torch.mm(position, div_term)) # 计算单词位置沿词向量维度的纹理值
-        pe[:, 1 : : 2] = torch.cos(torch.mm(position, div_term))
-        pe.unsqueeze_(0) # 增加批次维度，[1, max_len, embedding_dim]
-        self.register_buffer('pe', pe) # 将位置编码矩阵注册为buffer(不参加训练)
+        pe[:, 0:: 2] = torch.sin(torch.mm(position, div_term))  # 计算单词位置沿词向量维度的纹理值
+        pe[:, 1:: 2] = torch.cos(torch.mm(position, div_term))
+        pe.unsqueeze_(0)  # 增加批次维度，[1, max_len, embedding_dim]
+        self.register_buffer('pe', pe)  # 将位置编码矩阵注册为buffer(不参加训练)
 
-    def forward(self, x): # 将一个批次中语句所有词向量与位置编码相加
+    def forward(self, x):  # 将一个批次中语句所有词向量与位置编码相加
         """
             x: [seq_len, batch_size, embedding_dim]
         """
         x = x + self.pe[:, x.size(1), :]  # 注意，位置编码不参与训练，因此设置requires_grad=False
         return self.dropout(x)
 
+
 class EncoderLayer(nn.Module):
 
-    def __init__(self, embedding_dim, heads, dropout=0.1):
+    def __init__(self, embedding_dim, heads,device, dropout=0.1):
         super().__init__()
 
-        self.attn = MultiHeadAttention(heads, embedding_dim, dropout=dropout)
-        self.ff = FeedForward(embedding_dim, dropout=dropout)
-
+        self.attn = MultiHeadAttention(heads, embedding_dim, device,dropout=dropout)
+        self.ff = FeedForward(embedding_dim, device,dropout=dropout)
 
     def forward(self, input, mask):
         """E
@@ -178,40 +185,42 @@ class EncoderLayer(nn.Module):
         # 第一个enc_inputs * W_Q = Q
         # 第二个enc_inputs * W_K = K
         # 第三个enc_inputs * W_V = V
-        output, mask = self.attn(input, input, input,mask)  # enc_inputs to same Q,K,V（未线性变换前）
-        output = self.pos_ffn(output) # output: [bsize, sqel, embedding_dim]
+        output, mask = self.attn(input, input, input, mask)  # enc_inputs to same Q,K,V（未线性变换前）
+        output = self.pos_ffn(output)  # output: [bsize, sqel, embedding_dim]
         return output, mask
+
 
 class Encoder(nn.Module):
 
-    def __init__(self, vocab_size, embedding_dim, N, heads, dropout):
+    def __init__(self, vocab_size, embedding_dim, N, heads, dropout,device):
         super().__init__()
         self.N = N
         self.embedding_dim = embedding_dim
         self.embed = nn.Embedding(vocab_size, embedding_dim)
         self.pe = PositionalEncoding(embedding_dim, dropout=dropout)
-        self.layers = nn.ModuleList([EncoderLayer(embedding_dim,heads) for _ in range(N)])
+        self.layers = nn.ModuleList([EncoderLayer(embedding_dim, heads,device) for _ in range(N)])
         self.mask = Mask()
+        self.device = device
 
     def forward(self, input):
         """
             enc_inputs: [bsize, sqel]
         """
-        x = self.embed(input) # [bsize, sqel, embedding_dim]
+        x = self.embed(input)  # [bsize, sqel, embedding_dim]
         x = self.pe(x)
         attn = []
-        mask = self.mask.en_mask(input,input) # [bsize, sqel, sqel]
+        mask = self.mask.en_mask(input, input)  # [bsize, sqel, sqel]
         for layer in self.layers:
-            x, att = layer(x, mask) #[bsize, sqel, embedding_dim], mask: [bsize, n_heads, sqel, sqel]
+            x, att = layer(x, mask)  # [bsize, sqel, embedding_dim], mask: [bsize, n_heads, sqel, sqel]
             attn.append(att)
-        return x,attn
+        return x, attn
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, embedding_dim, heads, dropout=0.1):
+    def __init__(self, embedding_dim, heads, device,dropout=0.1):
         super(DecoderLayer, self).__init__()
-        self.dec_self_attn = MultiHeadAttention(heads, embedding_dim, dropout=dropout)
-        self.dec_enc_attn = MultiHeadAttention(heads, embedding_dim, dropout=dropout)
+        self.dec_self_attn = MultiHeadAttention(heads, embedding_dim,device, dropout=dropout)
+        self.dec_enc_attn = MultiHeadAttention(heads, embedding_dim, device,dropout=dropout)
         self.pos_ffn = FeedForward(embedding_dim, dropout=dropout)
 
     def forward(self, tgt_inputs, src_outputs, dec_self_attn_mask, dec_enc_attn_mask):
@@ -232,12 +241,13 @@ class DecoderLayer(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, tgt_vocab_size, embedding_dim, N, heads, dropout):
+    def __init__(self, tgt_vocab_size, embedding_dim, N, heads, dropout,device):
         super(Decoder, self).__init__()
         self.tgt_emb = nn.Embedding(tgt_vocab_size, embedding_dim)  # Decoder输入的embed词表
         self.pos_emb = PositionalEncoding(embedding_dim)
-        self.layers = nn.ModuleList([DecoderLayer(embedding_dim, heads) for _ in range(N)])  # Decoder的blocks
+        self.layers = nn.ModuleList([DecoderLayer(embedding_dim, heads,device) for _ in range(N)])  # Decoder的blocks
         self.mask = Mask()
+        self.device = device
 
     def forward(self, dec_inputs, enc_inputs, enc_outputs):
         """
@@ -246,14 +256,15 @@ class Decoder(nn.Module):
         enc_outputs: [batch_size, src_len, d_model]   # 用在Encoder-Decoder Attention层
         """
         dec_outputs = self.tgt_emb(dec_inputs)  # [batch_size, tgt_len, d_model]
-        dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1)  # [batch_size, tgt_len, d_model]
+        dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1).to(device)  # [batch_size, tgt_len, d_model]
         # Decoder输入序列的pad mask矩阵（这个例子中decoder是没有加pad的，实际应用中都是有pad填充的）
-        dec_self_attn_pad_mask = self.mask.en_mask(dec_inputs, dec_inputs)  # [batch_size, tgt_len, tgt_len]
+        dec_self_attn_pad_mask = self.mask.en_mask(dec_inputs, dec_inputs).to(device)  # [batch_size, tgt_len, tgt_len]
         # Masked Self_Attention：当前时刻是看不到未来的信息的
-        dec_self_attn_subsequence_mask = self.mask.de_mask(dec_inputs)  # [batch_size, tgt_len, tgt_len]
+        dec_self_attn_subsequence_mask = self.mask.de_mask(dec_inputs).to(device)  # [batch_size, tgt_len, tgt_len]
 
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
-        dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequence_mask), 0) # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
+        dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequence_mask),
+                                      0).to(device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
 
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
@@ -274,7 +285,7 @@ class Decoder(nn.Module):
 
 class Transformer(nn.Module):
 
-    def __init__(self, src_vocab, target_vocab, embedding_dim, N, heads, dropout):
+    def __init__(self, src_vocab, target_vocab, embedding_dim, N, heads, dropout, device):
         super().__init__()
         self.s_vocab = src_vocab
         self.t_vocab = target_vocab
@@ -282,9 +293,10 @@ class Transformer(nn.Module):
         self.N = N
         self.heads = heads
         self.dropout = dropout
-        self.encoder = Encoder(src_vocab, embedding_dim, N, heads, dropout)
-        self.decoder = Decoder(target_vocab, embedding_dim, N, heads, dropout)
-        self.classifier = nn.Linear(embedding_dim, target_vocab)
+        self.encoder = Encoder(src_vocab, embedding_dim, N, heads, dropout,device).to(device)
+        self.decoder = Decoder(target_vocab, embedding_dim, N, heads, dropout,device).to(device)
+        self.classifier = nn.Linear(embedding_dim, target_vocab,bias=False).to(device)
+        self.device = device
 
     def forward(self, src, target):
         """Transformers的输入：两个序列
@@ -317,14 +329,15 @@ class Transformer(nn.Module):
         print('save model parameters to [%s]' % path, file=sys.stderr)
 
         params = {  # 相应参数的设定
-            'args': dict(src_vocab=self.s_vocab, target_vocab=self.t_vocab, embedding_dim=self.embed, N=self.N, heads=self.heads, dropout=self.dropout),
+            'args': dict(src_vocab=self.s_vocab, target_vocab=self.t_vocab, embedding_dim=self.embed, N=self.N,
+                         heads=self.heads, dropout=self.dropout, device=self.device),
             'state_dict': self.state_dict()
         }
         torch.save(params, path)
 
 
 # 返回一个batch和对应的target
-def make_target(data_en,data_de, ndata):
+def make_target(data_en, data_de, ndata):
     l = list(range(ndata))
     random.shuffle(l)
     for i in l:
@@ -337,7 +350,7 @@ def make_target(data_en,data_de, ndata):
 
 def train(args: Dict):
     model_save_path = args['--model_save_path']
-    with h5py.File(args['--src'], 'r') as f1,h5py.File(args['--target'], 'r') as f2:
+    with h5py.File(args['--src'], 'r') as f1, h5py.File(args['--target'], 'r') as f2:
         nword_en = f1['nword'][()]
         nword_de = f2['nword'][()]
         ndata = f1['ndata'][()]
@@ -345,14 +358,16 @@ def train(args: Dict):
         data_de = f2['group']
         torch.manual_seed(0)  # 固定随机种子
 
-        model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=int(args['--embedding_dim']), N=int(args['--N']), heads=int(args['--heads']), dropout=float(args['--dropout']))  # 模型初始化
+        device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
+
+        model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=int(args['--embedding_dim']),
+                            N=int(args['--N']), heads=int(args['--heads']), dropout=float(args['--dropout']),
+                            device=device)  # 模型初始化
 
         model.train()
 
         for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
             torch.nn.init.uniform_(param, a=-0.001, b=0.001)  # 给weight初始化
-
-        device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
 
         print('use device: %s' % device, file=sys.stderr)
         if args['--cuda']:
@@ -370,7 +385,7 @@ def train(args: Dict):
         print('start training')
         for epoch in range(20):
             cuda = 0
-            for src, target in make_target(data_en,data_de, ndata):
+            for src, target in make_target(data_en, data_de, ndata):
                 if args['--cuda']:
                     src = src.to(device)
                     target = target.to(device)
