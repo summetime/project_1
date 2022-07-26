@@ -14,6 +14,7 @@ import sys
 from docopt import docopt
 import time
 import math
+import numpy as np
 
 
 class ScaledDotProductAttention(nn.Module):
@@ -40,12 +41,12 @@ class ScaledDotProductAttention(nn.Module):
         if dropout is not None:
             s = dropout(s)
 
-        return output, mask
+        return output
 
 
 class FeedForward(nn.Module):
 
-    def __init__(self, embedding_dim,device, d_ff=2048, dropout=0.1):
+    def __init__(self, embedding_dim, device, d_ff=2048, dropout=0.1):
         super().__init__()
 
         self.embed = embedding_dim
@@ -61,9 +62,7 @@ class FeedForward(nn.Module):
 
     def forward(self, input):
         residual = input
-        print('r:', residual.size())
         output = self.net(input)
-        print('o:', output.size())
         # return nn.LayerNorm(d_model).to(device)(output + residual)
         # n = nn.LayerNorm(self.embed)
         # output = n(output + residual)
@@ -134,14 +133,14 @@ class MultiHeadAttention(nn.Module):
         mask = mask.unsqueeze(1).repeat(1, self.h, 1, 1)
 
         # calculate attention using function we will define next
-        ss, mask = self.attention(q, k, v, self.d_k, mask, self.dropout)
+        ss = self.attention(q, k, v, self.d_k, mask, self.dropout)
         # concatenate heads and put through final linear layer
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.embed)
         output = self.out(concat)
         # n = nn.LayerNorm(self.embed)
         # output = n(output+residual)
 
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual), mask
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -185,9 +184,9 @@ class EncoderLayer(nn.Module):
         # 第一个enc_inputs * W_Q = Q
         # 第二个enc_inputs * W_K = K
         # 第三个enc_inputs * W_V = V
-        output, mask = self.attn(input, input, input, mask)  # enc_inputs to same Q,K,V（未线性变换前）
-        output = self.pos_ffn(output)  # output: [bsize, sqel, embedding_dim]
-        return output, mask
+        output = self.attn(input, input, input, mask)  # enc_inputs to same Q,K,V（未线性变换前）
+        output = self.ff(output)  # output: [bsize, sqel, embedding_dim]
+        return output
 
 
 class Encoder(nn.Module):
@@ -208,12 +207,10 @@ class Encoder(nn.Module):
         """
         x = self.embed(input)  # [bsize, sqel, embedding_dim]
         x = self.pe(x)
-        attn = []
         mask = self.mask.en_mask(input, input)  # [bsize, sqel, sqel]
         for layer in self.layers:
-            x, att = layer(x, mask)  # [bsize, sqel, embedding_dim], mask: [bsize, n_heads, sqel, sqel]
-            attn.append(att)
-        return x, attn
+            x = layer(x, mask)  # [bsize, sqel, embedding_dim], mask: [bsize, n_heads, sqel, sqel]
+        return x
 
 
 class DecoderLayer(nn.Module):
@@ -221,7 +218,7 @@ class DecoderLayer(nn.Module):
         super(DecoderLayer, self).__init__()
         self.dec_self_attn = MultiHeadAttention(heads, embedding_dim,device, dropout=dropout)
         self.dec_enc_attn = MultiHeadAttention(heads, embedding_dim, device,dropout=dropout)
-        self.pos_ffn = FeedForward(embedding_dim, dropout=dropout)
+        self.pos_ffn = FeedForward(embedding_dim, device,dropout=dropout)
 
     def forward(self, tgt_inputs, src_outputs, dec_self_attn_mask, dec_enc_attn_mask):
         """
@@ -231,13 +228,11 @@ class DecoderLayer(nn.Module):
         dec_enc_attn_mask: [batch_size, tgt_len, src_len]
         """
         # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attn: [batch_size, n_heads, tgt_len, tgt_len]
-        tgt_inputs, dec_self_attn = self.dec_self_attn(tgt_inputs, tgt_inputs, tgt_inputs,
-                                                       dec_self_attn_mask)  # 这里的Q,K,V全是Decoder自己的输入
+        tgt_inputs= self.dec_self_attn(tgt_inputs, tgt_inputs, tgt_inputs,dec_self_attn_mask)  # 这里的Q,K,V全是Decoder自己的输入
         # dec_outputs: [batch_size, tgt_len, d_model], dec_enc_attn: [batch_size, h_heads, tgt_len, src_len]
-        tgt_inputs, dec_enc_attn = self.dec_enc_attn(tgt_inputs, src_outputs, src_outputs,
-                                                     dec_enc_attn_mask)  # Attention层的Q(来自decoder) 和 K,V(来自encoder)
+        tgt_inputs = self.dec_enc_attn(tgt_inputs, src_outputs, src_outputs,dec_enc_attn_mask)  # Attention层的Q(来自decoder) 和 K,V(来自encoder)
         tgt_inputs = self.pos_ffn(tgt_inputs)  # [batch_size, tgt_len, d_model]
-        return tgt_inputs, dec_self_attn, dec_enc_attn  # dec_self_attn, dec_enc_attn这两个是为了可视化的
+        return tgt_inputs  # dec_self_attn, dec_enc_attn这两个是为了可视化的
 
 
 class Decoder(nn.Module):
@@ -256,31 +251,27 @@ class Decoder(nn.Module):
         enc_outputs: [batch_size, src_len, d_model]   # 用在Encoder-Decoder Attention层
         """
         dec_outputs = self.tgt_emb(dec_inputs)  # [batch_size, tgt_len, d_model]
-        dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1).to(device)  # [batch_size, tgt_len, d_model]
+        dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1).to(self.device)  # [batch_size, tgt_len, d_model]
         # Decoder输入序列的pad mask矩阵（这个例子中decoder是没有加pad的，实际应用中都是有pad填充的）
-        dec_self_attn_pad_mask = self.mask.en_mask(dec_inputs, dec_inputs).to(device)  # [batch_size, tgt_len, tgt_len]
+        dec_self_attn_pad_mask = self.mask.en_mask(dec_inputs, dec_inputs).to(self.device)  # [batch_size, tgt_len, tgt_len]
         # Masked Self_Attention：当前时刻是看不到未来的信息的
-        dec_self_attn_subsequence_mask = self.mask.de_mask(dec_inputs).to(device)  # [batch_size, tgt_len, tgt_len]
+        dec_self_attn_subsequence_mask = self.mask.de_mask(dec_inputs).to(self.device)  # [batch_size, tgt_len, tgt_len]
 
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
         dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequence_mask),
-                                      0).to(device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
+                                      0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
 
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
         #                       dec_inputs只是提供expand的size的
         dec_enc_attn_mask = self.mask.en_mask(dec_inputs, enc_inputs)  # [batc_size, tgt_len, src_len]
 
-        dec_self_attns, dec_enc_attns = [], []
         for layer in self.layers:
             # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attn: [batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [batch_size, h_heads, tgt_len, src_len]
             # Decoder的Block是上一个Block的输出dec_outputs（变化）和Encoder网络的输出enc_outputs（固定）
-            dec_outputs, dec_self_attn, dec_enc_attn = layer(dec_outputs, enc_outputs, dec_self_attn_mask,
-                                                             dec_enc_attn_mask)
-            dec_self_attns.append(dec_self_attn)
-            dec_enc_attns.append(dec_enc_attn)
+            dec_outputs = layer(dec_outputs, enc_outputs, dec_self_attn_mask,dec_enc_attn_mask)
         # dec_outputs: [batch_size, tgt_len, d_model]
-        return dec_outputs, dec_self_attns, dec_enc_attns
+        return dec_outputs
 
 
 class Transformer(nn.Module):
@@ -308,12 +299,12 @@ class Transformer(nn.Module):
 
         # enc_outputs: [batch_size, src_len, d_model], enc_self_attns: [n_layers, batch_size, n_heads, src_len, src_len]
         # 经过Encoder网络后，得到的输出还是[batch_size, src_len, d_model]
-        en_outputs, enc_self_attns = self.encoder(src)
+        en_outputs= self.encoder(src)
         # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attns: [n_layers, batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [n_layers, batch_size, tgt_len, src_len]
-        de_outputs, dec_self_attns, dec_enc_attns = self.decoder(target, src, en_outputs)
+        de_outputs= self.decoder(target, src, en_outputs)
         # dec_outputs: [batch_size, tgt_len, d_model] -> dec_logits: [batch_size, tgt_len, tgt_vocab_size]
-        dec_logits = self.classifier(dec_outputs)
-        return dec_logits.view(-1, dec_logits.size(-1)), enc_self_attns, dec_self_attns, dec_enc_attns
+        de_logits = self.classifier(de_outputs)
+        return de_logits
 
     @staticmethod
     def load(model_path: str):
@@ -392,7 +383,7 @@ def train(args: Dict):
                 # forward
                 cuda += 1
                 out = model(src, target)
-                loss = Loss(out.transpose(1, 2), target)
+                loss = Loss(out.transpose(1,2), target)
                 # backward
                 loss.backward()
                 if cuda % 10 == 0:
