@@ -26,21 +26,20 @@ class ScaledDotProductAttention(nn.Module):
         V: [batch_size, n_heads, len_v(=len_k), d_v]
         attn_mask: [batch_size, n_heads, seq_len, seq_len]
         """
-        s = torch.matmul(Q, K.transpose(-1, -2)) / np.sqrt(d_k)  # scores : [batch_size, n_heads, len_q, len_k]
+        s = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(d_k)  # scores : [batch_size, n_heads, len_q, len_k]
         # mask矩阵填充scores（用-1e9填充s中与attn_mask中值为1位置相对应的元素）
         # mask掉那些为了padding长度增加的token，让其通过softmax计算后为0
         if mask is not None:
             mask = mask.unsqueeze(1)
-            scores = scores.masked_fill(mask == 0, -1e9)
+            s = s.masked_fill(mask == 0, -1e9)
 
-        p = F.Softmax(s, dim=-1) # 对最后一个维度(v)做softmax
+        p = F.softmax(s, dim=-1) # 对最后一个维度(v)做softmax
         # s : [batch_size, n_heads, len_q, len_k] * V: [batch_size, n_heads, len_v(=len_k), d_v]
         output = torch.matmul(p, V)  # output: [batch_size, n_heads, len_q, d_v]
         # output：[[z1,z2,...],[...]]向量, p注意力稀疏矩阵（用于可视化的）
         if dropout is not None:
             s = dropout(s)
 
-        output = torch.matmul(scores, v)
         return output,mask
 
 class FeedForward(nn.Module):
@@ -55,15 +54,16 @@ class FeedForward(nn.Module):
             nn.Linear(embedding_dim, d_ff),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(d_ff, embedding_dim)
+            nn.Linear(d_ff, embedding_dim),
+            nn.LayerNorm(self.embed),
         )
 
     def forward(self, input):
         residual = input
         output = self.net(input)
         # return nn.LayerNorm(d_model).to(device)(output + residual)
-        output = nn.LayerNorm((output + residual,self.embed))
-        return  output     # [bsize, seql, embedding_dim]
+        output += residua
+        return output     # [bsize, seql, embedding_dim]
 
 class Mask():
     def __init__(self):
@@ -110,7 +110,10 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.dropout = nn.Dropout(dropout)
-        self.out = nn.Linear(embedding_dim, embedding_dim)
+        self.out =nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim),
+            nn.LayerNorm(self.embed)
+        )
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -121,14 +124,14 @@ class MultiHeadAttention(nn.Module):
         v = self.v_linear(v).view(bsize, -1, self.h, self.d_k).transpose(1, 2) # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
         # 因为是多头，所以mask矩阵要扩充成4维的
         # mask: [bsize, seql, seql] -> [bsize,n_heads, seql, seql]
-        mask = mask.unsqueeze(1).repeat(1, n_heads, 1, 1)
+        mask = mask.unsqueeze(1).repeat(1, self.h, 1, 1)
 
         # calculate attention using function we will define next
-        scores ,mask= self.attention(q, k, v, self.d_k, mask, self.dropout)
+        ss ,mask= self.attention(q, k, v, self.d_k, mask, self.dropout)
         # concatenate heads and put through final linear layer
-        concat = scores.transpose(1, 2).contiguous().view(bs, -1, self.embed)
+        concat = ss.transpose(1, 2).contiguous().view(bsize , -1, self.embed)
         output = self.out(concat)
-        output = nn.LayerNorm(self.embed)(output + residual)
+        output += residual
 
         return output,mask
 
@@ -152,7 +155,7 @@ class PositionalEncoding(nn.Module):
         """
             x: [seq_len, batch_size, embedding_dim]
         """
-        x = x + self.pe[:x.size(0), :]  # 注意，位置编码不参与训练，因此设置requires_grad=False
+        x = x + self.pe[:, x.size(1), :]  # 注意，位置编码不参与训练，因此设置requires_grad=False
         return self.dropout(x)
 
 class EncoderLayer(nn.Module):
@@ -196,7 +199,7 @@ class Encoder(nn.Module):
         x = self.pe(x)
         attn = []
         mask = self.mask.en_mask(input,input) # [bsize, sqel, sqel]
-        for layer in range(self.layers):
+        for layer in self.layers:
             x, att = layer(x, mask) #[bsize, sqel, embedding_dim], mask: [bsize, n_heads, sqel, sqel]
             attn.append(att)
         return x,attn
@@ -241,16 +244,14 @@ class Decoder(nn.Module):
         enc_outputs: [batch_size, src_len, d_model]   # 用在Encoder-Decoder Attention层
         """
         dec_outputs = self.tgt_emb(dec_inputs)  # [batch_size, tgt_len, d_model]
-        dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1).to(
-            device)  # [batch_size, tgt_len, d_model]
+        dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1)  # [batch_size, tgt_len, d_model]
         # Decoder输入序列的pad mask矩阵（这个例子中decoder是没有加pad的，实际应用中都是有pad填充的）
-        dec_self_attn_pad_mask = self.mask.en_mask(dec_inputs, dec_inputs).to(device)  # [batch_size, tgt_len, tgt_len]
+        dec_self_attn_pad_mask = self.mask.en_mask(dec_inputs, dec_inputs)  # [batch_size, tgt_len, tgt_len]
         # Masked Self_Attention：当前时刻是看不到未来的信息的
-        dec_self_attn_subsequence_mask = self.mask.de_mask(dec_inputs).to(device)  # [batch_size, tgt_len, tgt_len]
+        dec_self_attn_subsequence_mask = self.mask.de_mask(dec_inputs)  # [batch_size, tgt_len, tgt_len]
 
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
-        dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequence_mask), 0).to(
-            device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
+        dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequence_mask), 0) # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
 
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
@@ -367,7 +368,7 @@ def train(args: Dict):
         print('start training')
         for epoch in range(20):
             cuda = 0
-            for src, target in make_target(data, ndata):
+            for src, target in make_target(data_en,data_de, ndata):
                 if args['--cuda']:
                     src = src.to(device)
                     target = target.to(device)
