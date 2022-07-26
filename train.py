@@ -63,10 +63,9 @@ class FeedForward(nn.Module):
         output = self.net(input)
         print('o:',output.size())
         # return nn.LayerNorm(d_model).to(device)(output + residual)
-        n = nn.LayerNorm(self.embed)
-        output = n(output + residual)
-        print('o:',output.size())
-        return  output# [bsize, seql, embedding_dim]
+        # n = nn.LayerNorm(self.embed)
+        # output = n(output + residual)
+        return  nn.LayerNorm(self.embed)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 
@@ -133,10 +132,10 @@ class MultiHeadAttention(nn.Module):
         # concatenate heads and put through final linear layer
         concat = ss.transpose(1, 2).contiguous().view(bsize , -1, self.embed)
         output = self.out(concat)
-        n = nn.LayerNorm(self.embed)
-        output = n(output+residual)
+        # n = nn.LayerNorm(self.embed)
+        # output = n(output+residual)
 
-        return output,mask
+        return nn.LayerNorm(self.embed)(output + residual),mask
 
 class PositionalEncoding(nn.Module):
     def __init__(self, embedding_dim, dropout=0.1, max_len=5000):
