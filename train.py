@@ -55,15 +55,20 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(d_ff, embedding_dim),
-            nn.LayerNorm(self.embed),
         )
 
     def forward(self, input):
         residual = input
+        print('r:',residual.size())
         output = self.net(input)
+        print('o:',output.size())
         # return nn.LayerNorm(d_model).to(device)(output + residual)
-        output += residua
-        return output     # [bsize, seql, embedding_dim]
+        n = nn.LayerNorm(self.embed)
+        output = n(output + residual)
+        print('o:',output.size())
+        return  output# [bsize, seql, embedding_dim]
+
+
 
 class Mask():
     def __init__(self):
@@ -110,10 +115,7 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.dropout = nn.Dropout(dropout)
-        self.out =nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.LayerNorm(self.embed)
-        )
+        self.out = nn.Linear(embedding_dim, embedding_dim)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -131,7 +133,8 @@ class MultiHeadAttention(nn.Module):
         # concatenate heads and put through final linear layer
         concat = ss.transpose(1, 2).contiguous().view(bsize , -1, self.embed)
         output = self.out(concat)
-        output += residual
+        n = nn.LayerNorm(self.embed)
+        output = n(output+residual)
 
         return output,mask
 
