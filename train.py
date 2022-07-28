@@ -1,7 +1,7 @@
 # wxy
 # -*- coding:utf-8 -*-
 '''Usage:
-    train.py --cuda=<int> train --src="" --target="" --model_save_path="" --embedding_dim=<int> --N=<int> --heads=<int> --dropout=<float>  [options]
+    train.py --cuda=<int> train --en="" --de="" --target="" --model_save_path="" --embedding_dim=<int> --N=<int> --heads=<int> --dropout=<float>  [options]
 '''
 import torch
 import torch.nn as nn
