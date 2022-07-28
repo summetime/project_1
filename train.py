@@ -15,6 +15,7 @@ from docopt import docopt
 import time
 import math
 import numpy as np
+from nltk.translate.bleu_score import sentence_bleu
 
 
 class ScaledDotProductAttention(nn.Module):
@@ -328,25 +329,28 @@ class Transformer(nn.Module):
 
 
 # 返回一个batch和对应的target
-def make_target(data_en, data_de, ndata):
+def make_target(data_en, data_de,data_target, ndata):
     l = list(range(ndata))
     random.shuffle(l)
     for i in l:
-        src = data_en[str(i)][:]
-        target = data_de[str(i)][:]
-        src = torch.LongTensor(src)
+        en_src = data_en[str(i)][:]
+        de_src = data_de[str(i)][:]
+        target = data_target[str(i)][:]
+        en_src = torch.LongTensor(en_src)
+        de_src = torch.LongTensor(de_src)
         target = torch.LongTensor(target)
-        yield src, target  # 输入 输出  正确结果
+        yield en_src,de_src, target  # 输入 输出  正确结果
 
 
 def train(args: Dict):
     model_save_path = args['--model_save_path']
-    with h5py.File(args['--src'], 'r') as f1, h5py.File(args['--target'], 'r') as f2:
+    with h5py.File(args['--en'], 'r') as f1, h5py.File(args['--de'], 'r') as f2,h5py.File(args['--target'], 'r') as f3:
         nword_en = f1['nword'][()]
         nword_de = f2['nword'][()]
         ndata = f1['ndata'][()]
         data_en = f1['group']
         data_de = f2['group']
+        data_target = f3['group']
         torch.manual_seed(0)  # 固定随机种子
 
         device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
@@ -376,14 +380,17 @@ def train(args: Dict):
         print('start training')
         for epoch in range(20):
             cuda = 0
-            for src, target in make_target(data_en, data_de, ndata):
+            bleu_score = 0
+            for en_src, de_src,target in make_target(data_en, data_de, ndata):
                 if args['--cuda']:
-                    src = src.to(device)
+                    en_src = en_src.to(device)
+                    de_src = de_src.to(device)
                     target = target.to(device)
                 # forward
                 cuda += 1
-                out = model(src, target)
+                out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
+                bleu_score += bleu(target,out, weights=[0.25, 0.25, 0.25, 0.25])
                 # backward
                 loss.backward()
                 if cuda % 10 == 0:
@@ -391,12 +398,18 @@ def train(args: Dict):
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                 if cuda % 100 == 0:  # 打印loss
                     print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ',
-                          '{:.6f}'.format(loss / nword))
+                          '{:.6f}'.format(loss / nword_en),'bleu_score=',bleu_score)
                 if cuda % 1000 == 0:  # 更新学习率
                     scheduler.step(loss)
-                if cuda % 100 == 0:  # 保存模型
+                if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
+
+def bleu(reference,candidate):
+    reference = [reference.numpy().tolist()]
+    candidate = candidate.numpy().tolist()
+    score = sentence_bleu(reference, candidate,weights=[0.25,0.25,0.25,0.25])
+    return score
 
 
 if __name__ == "__main__":
