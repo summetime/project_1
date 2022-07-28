@@ -39,7 +39,7 @@ def Sort_target(filename1, filename2):
 # 4、词频统计：收集数据集上的词典，建立单词到索引的一对一映射并保存结果，（0索引对应padding，其它单词的索引从1开始累加，单词顺序从高频到低频）；
 def handle_1(filename1, filename2):
     temp_words = {}
-
+    words = {}
     with open(filename1, "r", encoding="utf-8") as file:
         for line in file:
             temp = line.strip()
@@ -48,7 +48,8 @@ def handle_1(filename1, filename2):
                     temp_words[word] = temp_words.get(word, 0) + 1  # 统计词频
     words["<pad>"] = 0
     words["<unk>"] = 1
-    words = {word: i for i, word in enumerate(sorted(temp_words, reverse=True), 2)}
+    words1 = {word: i for i, word in enumerate(sorted(temp_words, reverse=True), 2)}
+    words.update(words1)
     with open(filename2, 'wb') as file:
         file.write(repr(words).encode("utf-8"))
     return words

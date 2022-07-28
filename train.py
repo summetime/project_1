@@ -389,7 +389,7 @@ def train(args: Dict):
                 loss = Loss(out.transpose(1,2), target)
                 bleu_score += bleu(target, out, device)
                 if cuda % 10 == 0:
-                    print(bleu_score)
+                    print('This is bleu_score:',bleu_score)
                     bleu_score = 0
                 # backward
                 loss.backward()
@@ -406,11 +406,13 @@ def train(args: Dict):
                     model.save(model_save_path)
 
 def bleu(reference,candidate,device):
-    reference = reference.to(device)
-    candidate = candidate.to(device)
-    reference = [reference.numpy().tolist()]
-    candidate = candidate.numpy().tolist()
-    score = sentence_bleu(reference, candidate,weights=[0.25,0.25,0.25,0.25])
+    # reference = reference.to(device)
+    # candidate = candidate.to(device)
+    reference = [reference.cpu().detach().numpy().tolist()]
+    print(reference)
+    candidate = candidate.cpu().detach().numpy().tolist()
+    print(candidate)
+    score = sentence_bleu(reference, candidate,weights=[0.25,0.25,0.25,0.25]).to(device)
     return score
 
 
