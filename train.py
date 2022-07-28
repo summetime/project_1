@@ -381,7 +381,7 @@ def train(args: Dict):
         for epoch in range(20):
             cuda = 0
             bleu_score = 0
-            for en_src, de_src,target in make_target(data_en, data_de, ndata):
+            for en_src, de_src,target in make_target(data_en, data_de, data_target,ndata):
                 if args['--cuda']:
                     en_src = en_src.to(device)
                     de_src = de_src.to(device)
@@ -390,7 +390,7 @@ def train(args: Dict):
                 cuda += 1
                 out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
-                bleu_score += bleu(target,out, weights=[0.25, 0.25, 0.25, 0.25])
+                bleu_score += bleu(target,out,device)
                 # backward
                 loss.backward()
                 if cuda % 10 == 0:
@@ -405,7 +405,9 @@ def train(args: Dict):
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
-def bleu(reference,candidate):
+def bleu(reference,candidate,device):
+    reference = reference.to(device)
+    candidate = candidate.to(device)
     reference = [reference.numpy().tolist()]
     candidate = candidate.numpy().tolist()
     score = sentence_bleu(reference, candidate,weights=[0.25,0.25,0.25,0.25])
