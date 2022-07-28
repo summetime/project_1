@@ -123,12 +123,9 @@ class MultiHeadAttention(nn.Module):
         residual, bsize = q, q.size(0)
         # q:[bsize,nquery,embedding_dim] k:[bsize,sqel,embedding_dim] q:[bsize,sqel,embedding_dim]
         # perform linear operation and split into N heads
-        k = self.k_linear(k).view(bsize, -1, self.h, self.d_k).transpose(1,
-                                                                         2)  # [bsize,nquery,heads,embedding_dim/8] → [bsize,heads,nquery,embedding_dim/8]
-        q = self.q_linear(q).view(bsize, -1, self.h, self.d_k).transpose(1,
-                                                                         2)  # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
-        v = self.v_linear(v).view(bsize, -1, self.h, self.d_k).transpose(1,
-                                                                         2)  # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
+        k = self.k_linear(k).view(bsize, -1, self.h, self.d_k).transpose(1,2)  # [bsize,nquery,heads,embedding_dim/8] → [bsize,heads,nquery,embedding_dim/8]
+        q = self.q_linear(q).view(bsize, -1, self.h, self.d_k).transpose(1,2)  # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
+        v = self.v_linear(v).view(bsize, -1, self.h, self.d_k).transpose(1,2)  # [bsize,sqel,heads,embedding_dim/8] → [bsize,heads,sqel,embedding_dim/8]
         # 因为是多头，所以mask矩阵要扩充成4维的
         # mask: [bsize, seql, seql] -> [bsize,n_heads, seql, seql]
         mask = mask.unsqueeze(1).repeat(1, self.h, 1, 1)
@@ -162,7 +159,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):  # 将一个批次中语句所有词向量与位置编码相加
         """
-            x: [seq_len, batch_size, embedding_dim]
+            x: [batch_size,seq_len,embedding_dim]
         """
         x = x + self.pe[:, x.size(1), :]  # 注意，位置编码不参与训练，因此设置requires_grad=False
         return self.dropout(x)
@@ -390,7 +387,10 @@ def train(args: Dict):
                 cuda += 1
                 out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
-                bleu_score += bleu(target,out,device)
+                bleu_score += bleu(target, out, device)
+                if cuda % 10 == 0:
+                    print(bleu_score)
+                    bleu_score = 0
                 # backward
                 loss.backward()
                 if cuda % 10 == 0:
