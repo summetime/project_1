@@ -87,6 +87,9 @@ def handle_2(words_de, file_de, words_en, file_en, words_target, file_target):
         tmp_de = line_de.strip()
         tmp_target = line_target.strip()
         if tmp_en and tmp_de and tmp_target:
+            tmp_en = tmp_en.split()
+            tmp_de = tmp_de.split()
+            tmp_target = tmp_target.split()
             l = max(len(tmp_de), len(tmp_en), len(tmp_target))  # 词长
             if lines < bsize:  # 找出当前batch的大小
                 lines += 1  # 读取行数加一
@@ -101,6 +104,9 @@ def handle_2(words_de, file_de, words_en, file_en, words_target, file_target):
                 lines = 1  # 重新读取下一个batch 并把当前行加入
                 seql = l
                 bsize = int(2560 / seql)
+    with open('batch.txt',"w",encoding="utf-8") as file:
+        for line in batch_size:
+            file.write(str(line) + ' ')
     return batch_size
 
 #根据上次存储每个batch大小 存储下一个文件
@@ -115,12 +121,16 @@ def handle_3(words_de, file_de, words_en, file_en, words_target, file_target,bat
         tmp_en = line_en.strip()
         tmp_de = line_de.strip()
         tmp_target = line_target.strip()
-        print(tmp_de)
         if tmp_en and tmp_de and tmp_target:
+            tmp_en = tmp_en.split()
+            tmp_de = tmp_de.split()
+            tmp_target = tmp_target.split()
             if batch_flag:  # 找出当前batch的大小
                 bsize = batch_size[index][0]  # 行数
-                seql = batch_size[index][0]   # 词长
-                batch = []  # 创建一个batch
+                seql = batch_size[index][1]   # 词长
+                batch_en = []  # 创建一个batch
+                batch_de = []
+                batch_target = []
                 batch_flag = False
             if matrix_line < bsize:
                 batch_en.append([words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
@@ -146,6 +156,13 @@ def save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_
     index = 0
     for batch_en, batch_de, batch_target, index in handle_3(words_en, file_en, words_de, file_de, words_target,
                                                             file_target,batch_size):
+        print('index:', index)
+        for batch in batch_de:
+            print(len(batch))
+        for batch in batch_target:
+            print(len(batch))
+        for batch in batch_en:
+            print(len(batch))
         matrix_array_en = np.array(batch_en, dtype=np.int32)  # 将batch转成numpy类型存储
         group_en.create_dataset(str(index), data=matrix_array_en)
 
@@ -182,5 +199,5 @@ if __name__ == "__main__":
         sys.argv[10], 'w') as f5_en, h5py.File(sys.argv[11], 'w') as f5_target:  # result
         save(words_de, file_de, f5_de, words_en, file_en, f5_en, words_target, file_target, f5_target,batch_size)
 
-# python Pretreatment.py commoncrawl_BPE_de.txt commoncrawl_BPE_sort_de.txt commoncrawl_BPE_en.txt commoncrawl_BPE_sort_en.txt commoncrawl_BPE_sort_target.txt commoncrawl_dict_de.txt commoncrawl_dict_en.txt commoncrawl_dict_target.txt commoncrawl_result_de.hdf5 commoncrawl_result_en.hdf5 commoncrawl_result_target.hdf5
+# python Pretreatment.py BPE.de BPE_sort_de.txt BPE.en BPE_sort_en.txt BPE_sort_target.txt dict_de.txt dict_en.txt dict_target.txt result_de.hdf5 result_en.hdf5 result_target.hdf5
 # commoncrawl.de-en.de sort_de.txt commoncrawl.de-en.de sort_en.txt sort_target.txt dict_de.txt dict_en.txt dict_target.txt commoncrawl_result_de.hdf5 commoncrawl_result_en.hdf5 commoncrawl_result_target.hdf5
