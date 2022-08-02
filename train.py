@@ -366,7 +366,8 @@ def train(args: Dict):
                 cuda += 1
                 out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
-                bleu_score += bleu(target, out, device)
+                output = torch.argmax(model.classifier(out), dim=-1)
+                bleu_score += bleu(target, output, device)
                 loss.backward()
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
