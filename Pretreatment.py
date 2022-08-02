@@ -6,19 +6,7 @@ import torch
 import sys
 
 
-# 裁取数据
-def pre_Data(filename1, filename2):
-    with open(filename1, "w", encoding="utf-8") as file1, open(filename2, "w", encoding="utf-8") as file3:
-        with open(filename3, "r", encoding='utf-8') as file3, open(filename4, "r", encoding='utf-8') as file4:
-            for line1, line2 in zip(file3, file4):
-                temp1 = line1.strip()
-                temp2 = line2.strip()
-                if 3 < len(temp1) < 256 or 3 < len(temp2) < 256:
-                    file1.write(temp1 + '\n')
-                    file2.write(temp2 + '\n')
-
-
-def Sort_de(filename1, filename2):
+def Sort_en(filename1, filename2):
     with open(filename2, "w", encoding='utf-8') as file1:
         with open(filename1, "r", encoding='utf-8') as file:
             for line in file:
@@ -29,7 +17,7 @@ def Sort_de(filename1, filename2):
                 file1.write('\n')
 
 
-def Sort_en(filename1, filename2):
+def Sort_de(filename1, filename2):
     with open(filename2, "w", encoding='utf-8') as file1:
         with open(filename1, "r", encoding='utf-8') as file:
             for line in file:
@@ -67,22 +55,24 @@ def handle_1(filename1, filename2):
         file.write(repr(words).encode("utf-8"))
     return words
 
+
 def load(fileName):
-	with open(fileName, "rb") as frd:
-		tmp = frd.read().strip() #读文件并且去除
-		rs = eval(tmp.decode("utf-8"))  #eval() 函数计算或执行参数 读文件使用decode
-	return rs
+    with open(fileName, "rb") as frd:
+        tmp = frd.read().strip()  # 读文件并且去除
+        rs = eval(tmp.decode("utf-8"))  # eval() 函数计算或执行参数 读文件使用decode
+    return rs
 
 
 # 5、根据词典索引，将排序后的数据切分为batch（每个batch包含的token数量尽可能多，但不要超过2560个token）并转换为tensor（为matrix，batch size * seql,
 # batch size: 这个batch中包含几个句子，seql: 这些句子中最长句子的长度（短句使用padding，映射索引为0，填充到相同长度）），
 # 查找每个batch的大小
-def handle_2(words_de, file_de, words_en, file_en, words_target, file_target):
+def handle_2(file_en, file_de, file_target):
     batch_size = []
+    tt = []
     lines = 0  # 目前矩阵有几行
     seql = 3
     bsize = int(2560 / 3)
-    for line_de, line_en, line_target in zip(file_de, file_en, file_target):
+    for line_en, line_de, line_target in zip(file_en, file_de, file_target):
         tmp_en = line_en.strip()
         tmp_de = line_de.strip()
         tmp_target = line_target.strip()
@@ -104,19 +94,25 @@ def handle_2(words_de, file_de, words_en, file_en, words_target, file_target):
                 lines = 1  # 重新读取下一个batch 并把当前行加入
                 seql = l
                 bsize = int(2560 / seql)
-    with open('batch.txt',"w",encoding="utf-8") as file:
+        tt.append([len(tmp_de), len(tmp_en), len(tmp_target), l, lines, bsize, seql])
+    with open('batch.txt', "w", encoding="utf-8") as file:
         for line in batch_size:
+            file.write(str(line) + ' ')
+    with open('tt.txt', "w", encoding="utf-8") as file:
+        for line in tt:
             file.write(str(line) + ' ')
     return batch_size
 
-#根据上次存储每个batch大小 存储下一个文件
-def handle_3(words_de, file_de, words_en, file_en, words_target, file_target,batch_size):
+
+# 根据上次存储每个batch大小 存储下一个文件
+def handle_3(words_de, file_de, words_en, file_en, words_target, file_target, batch_size):
     index = 0
     batch_de = []
     batch_en = []
     batch_target = []
     matrix_line = 0
-    batch_flag = True
+    bsize = batch_size[0][0]  # 行数
+    seql = batch_size[0][1]  # 词长
     for line_de, line_en, line_target in zip(file_de, file_en, file_target):
         tmp_en = line_en.strip()
         tmp_de = line_de.strip()
@@ -125,44 +121,52 @@ def handle_3(words_de, file_de, words_en, file_en, words_target, file_target,bat
             tmp_en = tmp_en.split()
             tmp_de = tmp_de.split()
             tmp_target = tmp_target.split()
-            if batch_flag:  # 找出当前batch的大小
+            if matrix_line < bsize:
+                batch_en.append(
+                    [words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
+                batch_de.append(
+                    [words_de.get(w, 1) for w in tmp_de] + [0 for _ in range(seql - len(tmp_de))])  # 把当前行的数据存入batch
+                batch_target.append([words_target.get(w, 1) for w in tmp_target] + [0 for _ in range(
+                    seql - len(tmp_target))])  # 把当前行的数据存入batch
+                matrix_line += 1
+            else:  # 当前batch已经存储好 开始寻找下一个batch
+                yield batch_en, batch_de, batch_target, index
+                index += 1
                 bsize = batch_size[index][0]  # 行数
-                seql = batch_size[index][1]   # 词长
+                seql = batch_size[index][1]  # 词长
                 batch_en = []  # 创建一个batch
                 batch_de = []
                 batch_target = []
-                batch_flag = False
-            if matrix_line < bsize:
-                batch_en.append([words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
-                batch_de.append([words_de.get(w, 1) for w in tmp_de] + [0 for _ in range(seql - len(tmp_de))])  # 把当前行的数据存入batch
-                batch_target.append([words_target.get(w, 1) for w in tmp_target] + [0 for _ in range(seql - len(tmp_target))])  # 把当前行的数据存入batch
-                matrix_line += 1
-            else:  # 当前batch已经存储好 开始寻找下一个batch
-                batch_flag = True
-                matrix_line = 0
-                yield batch_en, batch_de, batch_target, index
-                index += 1
-    if batch_de and batch_en and batch_target:
+                batch_en.append(
+                    [words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
+                batch_de.append(
+                    [words_de.get(w, 1) for w in tmp_de] + [0 for _ in range(seql - len(tmp_de))])  # 把当前行的数据存入batch
+                batch_target.append([words_target.get(w, 1) for w in tmp_target] + [0 for _ in range(
+                    seql - len(tmp_target))])
+                matrix_line = 1
+    if batch_en and batch_de and batch_target:
         yield batch_en, batch_de, batch_target, index
-
 
 
 # 按hdf5格式存入文件。需要学会yield语法（生成器）的使用。HDF5存储格式：src(一个group)/<k, v>：存转换后的数据，k为数据的索引，从0自增，v为具体数据张量；
 # ndata:一个只有一个元素的向量，存src中数据的数量；nword:一个只有一个元素的向量，存第3步收集的词典大小。
-def save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_target, f5_target,batch_size):
+def save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_target, f5_target, batch_size):
     group_en = f5_en.create_group("group")
     group_de = f5_de.create_group("group")
     group_target = f5_target.create_group("group")
     index = 0
     for batch_en, batch_de, batch_target, index in handle_3(words_en, file_en, words_de, file_de, words_target,
-                                                            file_target,batch_size):
-        print('index:', index)
-        for batch in batch_de:
-            print(len(batch))
-        for batch in batch_target:
-            print(len(batch))
-        for batch in batch_en:
-            print(len(batch))
+                                                            file_target, batch_size):
+        # print('index:', index)
+        # print('de:')
+        # for batch in batch_en:
+        #     print(len(batch))
+        # print('target:')
+        # for batch in batch_target:
+        #     print(len(batch))
+        # print('en:')
+        # for batch in batch_de:
+        #     print(len(batch))
         matrix_array_en = np.array(batch_en, dtype=np.int32)  # 将batch转成numpy类型存储
         group_en.create_dataset(str(index), data=matrix_array_en)
 
@@ -183,21 +187,22 @@ def save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_
 
 
 if __name__ == "__main__":
-    Sort_de(sys.argv[1], sys.argv[2])  # BPE BPE_sort de
-    Sort_en(sys.argv[3], sys.argv[4])  # BPE BPE_sort en
+    Sort_en(sys.argv[1], sys.argv[2])  # BPE BPE_sort en
+    Sort_de(sys.argv[3], sys.argv[4])  # BPE BPE_sort de
     Sort_target(sys.argv[3], sys.argv[5])  # BPE BPE_sort target
-    words_de = handle_1(sys.argv[2], sys.argv[6])  # BPE_sort dict  de
-    words_en = handle_1(sys.argv[4], sys.argv[7])  # BPE_sort dict  en
+    words_de = handle_1(sys.argv[2], sys.argv[6])  # BPE_sort dict  en
+    words_en = handle_1(sys.argv[4], sys.argv[7])  # BPE_sort dict  de
     words_target = handle_1(sys.argv[5], sys.argv[8])  # BPE_sort dict  target
     # words_de = load(sys.argv[6])
     # words_en = load(sys.argv[7])
     # words_target = load(sys.argv[8])
-    with open(sys.argv[2], 'r', encoding="utf-8") as file_de, open(sys.argv[4], 'r', encoding="utf-8") as file_en, open(sys.argv[5], 'r', encoding="utf-8") as file_target:  # result
-        batch_size = handle_2(words_de, file_de, words_en, file_en, words_target, file_target)
-    with open(sys.argv[2], 'r', encoding="utf-8") as file_de, open(sys.argv[4], 'r', encoding="utf-8") as file_en, open(
-            sys.argv[5], 'r', encoding="utf-8") as file_target, h5py.File(sys.argv[9], 'w') as f5_de, h5py.File(
-        sys.argv[10], 'w') as f5_en, h5py.File(sys.argv[11], 'w') as f5_target:  # result
-        save(words_de, file_de, f5_de, words_en, file_en, f5_en, words_target, file_target, f5_target,batch_size)
+    with open(sys.argv[2], 'r', encoding="utf-8") as file_en, open(sys.argv[4], 'r', encoding="utf-8") as file_de, open(
+            sys.argv[5], 'r', encoding="utf-8") as file_target:  # result
+        batch_size = handle_2(file_en, file_de, file_target)
+    with open(sys.argv[2], 'r', encoding="utf-8") as file_en, open(sys.argv[4], 'r', encoding="utf-8") as file_de, open(
+            sys.argv[5], 'r', encoding="utf-8") as file_target, h5py.File(sys.argv[9], 'w') as f5_en, h5py.File(
+        sys.argv[10], 'w') as f5_de, h5py.File(sys.argv[11], 'w') as f5_target:  # result
+        save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_target, f5_target, batch_size)
 
-# python Pretreatment.py BPE.de BPE_sort_de.txt BPE.en BPE_sort_en.txt BPE_sort_target.txt dict_de.txt dict_en.txt dict_target.txt result_de.hdf5 result_en.hdf5 result_target.hdf5
-# commoncrawl.de-en.de sort_de.txt commoncrawl.de-en.de sort_en.txt sort_target.txt dict_de.txt dict_en.txt dict_target.txt commoncrawl_result_de.hdf5 commoncrawl_result_en.hdf5 commoncrawl_result_target.hdf5
+# python Pretreatment.py BPE.en BPE_sort_en.txt BPE.de BPE_sort_de.txt BPE_sort_target.txt dict_en.txt dict_de.txt dict_target.txt result_en.hdf5 result_de.hdf5 result_target.hdf5
+#python ..\GIT\Pretreatment.py commoncrawl.de-en.en sort_en.txt commoncrawl.de-en.de sort_de.txt sort_target.txt dict_en.txt dict_de.txt dict_target.txt commoncrawl_result_en.hdf5 commoncrawl_result_de.hdf5 commoncrawl_result_target.hdf5
