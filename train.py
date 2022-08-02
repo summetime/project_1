@@ -175,6 +175,7 @@ class Encoder(nn.Module):
         self.N = N
         self.embedding_dim = embedding_dim
         self.embed = nn.Embedding(vocab_size, embedding_dim)
+        print(self.embed.num_embeddings)
         self.pe = PositionalEncoding(embedding_dim, dropout=dropout)
         self.layers = nn.ModuleList([EncoderLayer(embedding_dim, heads,device) for _ in range(N)])
         self.mask = Mask()
@@ -184,6 +185,8 @@ class Encoder(nn.Module):
         """
             enc_inputs: [bsize, sqel]
         """
+        print(input.min())
+        print(input.max())
         x = self.embed(input)  # [bsize, sqel, embedding_dim]
         x = self.pe(x)  # 位置加输入
         mask = self.mask.en_mask(input, input)  # [bsize, sqel, sqel]
@@ -321,8 +324,8 @@ def make_target(data_en, data_de,data_target, ndata):
 def train(args: Dict):
     model_save_path = args['--model_save_path']
     with h5py.File(args['--en'], 'r') as f1, h5py.File(args['--de'], 'r') as f2,h5py.File(args['--target'], 'r') as f3:
-        nword_en = f1['nword'][()]
-        nword_de = f2['nword'][()]
+        nword_en = f1['nword'][()] + 3
+        nword_de = f2['nword'][()] + 3
         ndata = f1['ndata'][()]
         data_en = f1['group']
         data_de = f2['group']
@@ -337,8 +340,8 @@ def train(args: Dict):
 
         model.train()
 
-        for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
-            torch.nn.init.uniform_(param, a=-0.001, b=0.001)  # 给weight初始化
+        # for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
+        #     torch.nn.init.uniform_(param, a=-0.001, b=0.001)  # 给weight初始化
 
         print('use device: %s' % device, file=sys.stderr)
         if args['--cuda']:
@@ -406,4 +409,4 @@ if __name__ == "__main__":
     else:
         raise RuntimeError('invalid run mode')
 
-# python train.py --cuda=0 train --en="commoncrawl_result_de.hdf5" --de="commoncrawl_result_en.hdf5" --target="commoncrawl_result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
+# python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
