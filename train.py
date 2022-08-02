@@ -175,7 +175,7 @@ class Encoder(nn.Module):
         self.N = N
         self.embedding_dim = embedding_dim
         self.embed = nn.Embedding(vocab_size, embedding_dim)
-        print(self.embed.num_embeddings)
+        print('en',self.embed.num_embeddings)
         self.pe = PositionalEncoding(embedding_dim, dropout=dropout)
         self.layers = nn.ModuleList([EncoderLayer(embedding_dim, heads,device) for _ in range(N)])
         self.mask = Mask()
@@ -185,8 +185,8 @@ class Encoder(nn.Module):
         """
             enc_inputs: [bsize, sqel]
         """
-        print(input.min())
-        print(input.max())
+        print('en',input.min())
+        print('en',input.max())
         x = self.embed(input)  # [bsize, sqel, embedding_dim]
         x = self.pe(x)  # 位置加输入
         mask = self.mask.en_mask(input, input)  # [bsize, sqel, sqel]
@@ -219,6 +219,7 @@ class Decoder(nn.Module):
     def __init__(self, tgt_vocab_size, embedding_dim, N, heads, dropout,device):
         super(Decoder, self).__init__()
         self.tgt_emb = nn.Embedding(tgt_vocab_size, embedding_dim)  # Decoder词表
+        print(self.tgt_emb.num_embeddings)
         self.pos_emb = PositionalEncoding(embedding_dim, dropout=dropout)
         self.layers = nn.ModuleList([DecoderLayer(embedding_dim, heads,device) for _ in range(N)])
         self.mask = Mask()
@@ -230,6 +231,8 @@ class Decoder(nn.Module):
         enc_inputs: [batch_size, src_len]
         enc_outputs: [batch_size, src_len, embedding]   # 用在Encoder-Decoder Attention层
         """
+        print(dec_inputs.min())
+        print(dec_inputs.max())
         dec_outputs = self.tgt_emb(dec_inputs)  # [batch_size, tgt_len, embedding]
         dec_outputs = self.pos_emb(dec_outputs).to(self.device)  # [batch_size, tgt_len, embedding]
         # Decoder输入序列的pad mask矩阵（这个例子中decoder是没有加pad的，实际应用中都是有pad填充的）
@@ -276,14 +279,12 @@ class Transformer(nn.Module):
         """
         # tensor to store decoder outputs
         # outputs = torch.zeros(batch_size, tgt_len, tgt_vocab_size).to(self.device)
-
-        # enc_outputs: [batch_size, src_len, d_model], enc_self_attns: [n_layers, batch_size, n_heads, src_len, src_len]
-        # 经过Encoder网络后，得到的输出还是[batch_size, src_len, d_model]
+        # enc_outputs: [batch_size, src_len, embedding_dim], enc_self_attns: [n_layers, batch_size, n_heads, src_len, src_len]
+        # 经过Encoder网络后，得到的输出还是[batch_size, src_len, embedding_dim]
         en_outputs= self.encoder(src)
         # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attns: [n_layers, batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [n_layers, batch_size, tgt_len, src_len]
         de_outputs= self.decoder(target, src, en_outputs)
         # dec_outputs: [batch_size, tgt_len, d_model] -> dec_logits: [batch_size, tgt_len, tgt_vocab_size]
-        de_logits = self.classifier(de_outputs)
         return de_logits
 
     @staticmethod
@@ -324,8 +325,8 @@ def make_target(data_en, data_de,data_target, ndata):
 def train(args: Dict):
     model_save_path = args['--model_save_path']
     with h5py.File(args['--en'], 'r') as f1, h5py.File(args['--de'], 'r') as f2,h5py.File(args['--target'], 'r') as f3:
-        nword_en = f1['nword'][()] + 3
-        nword_de = f2['nword'][()] + 3
+        nword_en = f1['nword'][()]
+        nword_de = f2['nword'][()]
         ndata = f1['ndata'][()]
         data_en = f1['group']
         data_de = f2['group']
@@ -369,7 +370,7 @@ def train(args: Dict):
                 cuda += 1
                 out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
-                output = torch.argmax(model.classifier(out), dim=-1)
+                output = torch.argmax(out, dim=-1)
                 bleu_score += bleu(target, output, device)
                 loss.backward()
                 if cuda % 10 == 0:

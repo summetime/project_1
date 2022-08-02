@@ -106,7 +106,7 @@ def handle_2(file_en, file_de, file_target):
 
 
 # 根据上次存储每个batch大小 存储下一个文件
-def handle_3(words_de, file_de, words_en, file_en, words_target, file_target, batch_size):
+def handle_3( words_en, file_en,words_de, file_de, words_target, file_target, batch_size):
     index = 0
     batch_de = []
     batch_en = []
@@ -178,8 +178,8 @@ if __name__ == "__main__":
     Sort_en(sys.argv[1], sys.argv[2])  # BPE BPE_sort en
     Sort_de(sys.argv[3], sys.argv[4])  # BPE BPE_sort de
     Sort_target(sys.argv[3], sys.argv[5])  # BPE BPE_sort target
-    words_de = handle_1(sys.argv[2], sys.argv[6])  # BPE_sort dict  en
-    words_en = handle_1(sys.argv[4], sys.argv[7])  # BPE_sort dict  de
+    words_en = handle_1(sys.argv[2], sys.argv[6])  # BPE_sort dict  en
+    words_de = handle_1(sys.argv[4], sys.argv[7])  # BPE_sort dict  de
     words_target = handle_1(sys.argv[5], sys.argv[8])  # BPE_sort dict  target
     with open(sys.argv[2], 'r', encoding="utf-8") as file_en, open(sys.argv[4], 'r', encoding="utf-8") as file_de, open(
             sys.argv[5], 'r', encoding="utf-8") as file_target:  # result
