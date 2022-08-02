@@ -80,12 +80,12 @@ def handle_2(file_en, file_de, file_target):
             tmp_en = tmp_en.split()
             tmp_de = tmp_de.split()
             tmp_target = tmp_target.split()
-            l = max(len(tmp_de), len(tmp_en), len(tmp_target))  # 词长
+            l = max(len(tmp_en), len(tmp_de), len(tmp_target))  # 词长
             if lines < bsize:  # 找出当前batch的大小
                 lines += 1  # 读取行数加一
                 if l > seql:
                     if lines * l > 2560:
-                        batch_size.append((bsize, seql))  # 再加会超 则直接存为一个batch
+                        batch_size.append((lines-1, seql))  # 再加会超 则直接存为一个batch
                         lines = 1  # 将本行加入下一个batch
                     seql = l
                     bsize = int(2560 / seql)
@@ -94,12 +94,11 @@ def handle_2(file_en, file_de, file_target):
                 lines = 1  # 重新读取下一个batch 并把当前行加入
                 seql = l
                 bsize = int(2560 / seql)
+    if lines > 0:
+        batch_size.append((lines, seql))
         tt.append([len(tmp_de), len(tmp_en), len(tmp_target), l, lines, bsize, seql])
     with open('batch.txt', "w", encoding="utf-8") as file:
         for line in batch_size:
-            file.write(str(line) + ' ')
-    with open('tt.txt', "w", encoding="utf-8") as file:
-        for line in tt:
             file.write(str(line) + ' ')
     return batch_size
 
@@ -137,12 +136,9 @@ def handle_3(words_de, file_de, words_en, file_en, words_target, file_target, ba
                 batch_en = []  # 创建一个batch
                 batch_de = []
                 batch_target = []
-                batch_en.append(
-                    [words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
-                batch_de.append(
-                    [words_de.get(w, 1) for w in tmp_de] + [0 for _ in range(seql - len(tmp_de))])  # 把当前行的数据存入batch
-                batch_target.append([words_target.get(w, 1) for w in tmp_target] + [0 for _ in range(
-                    seql - len(tmp_target))])
+                batch_en.append([words_en.get(w, 1) for w in tmp_en] + [0 for _ in range(seql - len(tmp_en))])  # 把当前行的数据存入batch
+                batch_de.append([words_de.get(w, 1) for w in tmp_de] + [0 for _ in range(seql - len(tmp_de))])  # 把当前行的数据存入batch
+                batch_target.append([words_target.get(w, 1) for w in tmp_target] + [0 for _ in range(seql - len(tmp_target))])
                 matrix_line = 1
     if batch_en and batch_de and batch_target:
         yield batch_en, batch_de, batch_target, index
@@ -157,7 +153,7 @@ def save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_
     index = 0
     for batch_en, batch_de, batch_target, index in handle_3(words_en, file_en, words_de, file_de, words_target,
                                                             file_target, batch_size):
-        # print('index:', index)
+        # print('index:', index+1)
         # print('de:')
         # for batch in batch_en:
         #     print(len(batch))
@@ -205,4 +201,5 @@ if __name__ == "__main__":
         save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_target, f5_target, batch_size)
 
 # python Pretreatment.py BPE.en BPE_sort_en.txt BPE.de BPE_sort_de.txt BPE_sort_target.txt dict_en.txt dict_de.txt dict_target.txt result_en.hdf5 result_de.hdf5 result_target.hdf5
-#python ..\GIT\Pretreatment.py commoncrawl.de-en.en sort_en.txt commoncrawl.de-en.de sort_de.txt sort_target.txt dict_en.txt dict_de.txt dict_target.txt commoncrawl_result_en.hdf5 commoncrawl_result_de.hdf5 commoncrawl_result_target.hdf5
+# python ..\GIT\Pretreatment.py commoncrawl.de-en.en sort_en.txt commoncrawl.de-en.de sort_de.txt sort_target.txt dict_en.txt dict_de.txt dict_target.txt commoncrawl_result_en.hdf5 commoncrawl_result_de.hdf5 commoncrawl_result_target.hdf5
+# python ..\GIT\Pretreatment.py en.en en.txt de.de _de.txt target.txt dict_en.txt dict_de.txt dict_target.txt test_en.hdf5 test_de.hdf5 test_result_target.hdf5
