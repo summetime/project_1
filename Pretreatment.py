@@ -50,9 +50,11 @@ def handle_1(filename1, filename2):
     words["<pad>"] = 0
     words["<unk>"] = 1
     words1 = {word: i for i, word in enumerate(sorted(temp_words, reverse=True), 2)}
+    print('words1:',len(words1))
     words.update(words1)
     with open(filename2, 'wb') as file:
         file.write(repr(words).encode("utf-8"))
+    print('words',len(words))
     return words
 
 
@@ -153,16 +155,6 @@ def save(words_en, file_en, f5_en, words_de, file_de, f5_de, words_target, file_
     index = 0
     for batch_en, batch_de, batch_target, index in handle_3(words_en, file_en, words_de, file_de, words_target,
                                                             file_target, batch_size):
-        # print('index:', index+1)
-        # print('de:')
-        # for batch in batch_en:
-        #     print(len(batch))
-        # print('target:')
-        # for batch in batch_target:
-        #     print(len(batch))
-        # print('en:')
-        # for batch in batch_de:
-        #     print(len(batch))
         matrix_array_en = np.array(batch_en, dtype=np.int32)  # 将batch转成numpy类型存储
         group_en.create_dataset(str(index), data=matrix_array_en)
 
@@ -189,9 +181,6 @@ if __name__ == "__main__":
     words_de = handle_1(sys.argv[2], sys.argv[6])  # BPE_sort dict  en
     words_en = handle_1(sys.argv[4], sys.argv[7])  # BPE_sort dict  de
     words_target = handle_1(sys.argv[5], sys.argv[8])  # BPE_sort dict  target
-    # words_de = load(sys.argv[6])
-    # words_en = load(sys.argv[7])
-    # words_target = load(sys.argv[8])
     with open(sys.argv[2], 'r', encoding="utf-8") as file_en, open(sys.argv[4], 'r', encoding="utf-8") as file_de, open(
             sys.argv[5], 'r', encoding="utf-8") as file_target:  # result
         batch_size = handle_2(file_en, file_de, file_target)
