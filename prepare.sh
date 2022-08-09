@@ -22,14 +22,14 @@ perl moses/mosesdecoder/scripts/training/clean-corpus-n.perl corpus.tok $src $tg
 #
 #### Train truecaser and truecase
 for lang in $src $tgt; do
-  perl moses/mosesdecoder/scripts/recaser/train-truecaser.perl -corpus corpus.tok.$lang -model truecase-model.$lang
-  perl moses/mosesdecoder/scripts/recaser/truecase.perl -model truecase-model.$lang < corpus.tok.$lang > corpus.tc.$lang
+  perl moses/mosesdecoder/scripts/recaser/train-truecaser.perl -corpus corpus.clean.$lang -model truecase-model.$lang
+  perl moses/mosesdecoder/scripts/recaser/truecase.perl -model truecase-model.$lang < corpus.clean.$lang > corpus.tc.$lang
 done
 
 ## Tidy up and compress
 for lang in $src $tgt; do
   gzip corpus.tc.$lang
-  rm -f corpus.tok.$lang corpus.clean.$lang corpus.retained
+  rm -f corpus.clean.$lang corpus.retained
 done
 
 ### bpe

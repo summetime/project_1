@@ -17,7 +17,7 @@ for lang in $src $tgt; do
     echo "ti qu成功"
 done
 for lang in $src $tgt; do   
-    perl moses/mosesdecoder/scripts/tokenizer/normalize-punctuation.perl -l $lang t_$lang.txt | \
+    perl moses/mosesdecoder/scripts/tokenizer/normalize-punctuation.perl -l $lang < t_$lang.txt | \
     perl moses/mosesdecoder/scripts/tokenizer/tokenizer.perl -a -l $lang  > test.$lang       # 分词
     echo "Tokenise成功"
 done

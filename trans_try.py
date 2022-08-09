@@ -430,16 +430,10 @@ optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.99)  # 用adam的�
 # ====================================================================================================
 
 def bleu(reference,candidate):
-    # reference = reference.to(device)
-    # candidate = candidate.to(device)
     score = 0
-    # print('reference',reference)
-    # print('candidate',candidate)
     reference = reference.cpu().detach().numpy().tolist()
-    # print(reference)
     candidate = candidate.cpu().detach().numpy().tolist()
     l = len(candidate)
-    # print(candidate)
     for i in range(l):
         score += sentence_bleu([reference[i]], candidate[i],weights=[0.25,0.25,0.25,0.25])
     return score
@@ -479,7 +473,7 @@ def greedy_decoder(model, enc_input, start_symbol):
     :param model: Transformer Model
     :param enc_input: The encoder input
     :param start_symbol: The start symbol. In this example it is 'S' which corresponds to index 4
-    :return: The target input
+    :return: The target inputa
     """
     enc_outputs, enc_self_attns = model.encoder(enc_input)
     dec_input = torch.zeros(1, 0).type_as(enc_input.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)

@@ -1,8 +1,7 @@
 # wxy
-# -*- coding:utf-8 -*-
 '''Usage:
     train.py --cuda=<int> train --en="" --de="" --target="" --model_save_path="" --embedding_dim=<int> --N=<int> --heads=<int> --dropout=<float>  [options]
-    train.py --cuda=<int> decode --model_path=""
+    train.py --cuda=<int> decode --model_path="" --en="" --en_dict="" --target_dict=""
 '''
 import torch
 import torch.nn as nn
@@ -17,6 +16,8 @@ import time
 import math
 import numpy as np
 from nltk.translate.bleu_score import sentence_bleu
+from torch.optim.lr_scheduler import LambdaLR
+import torch.optim as optim
 
 
 class ScaledDotProductAttention(nn.Module):
@@ -57,11 +58,14 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
+        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
+        output = self.norm(output + residual)
+        return output.to(self.device) # [bsize, seql, embedding_dim]
+        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
@@ -105,6 +109,7 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
+        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -121,8 +126,9 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
+        output = self.norm(output + residual)
+        return output.to(self.device)
+        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -134,8 +140,8 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, embedding_dim)  # 位置编码矩阵，维度[max_len, embedding_dim]
         position = torch.arange(0.0, max_len).unsqueeze(1)  # 单词位置  [max_len,1]
         div_term = torch.exp(torch.arange(0.0, embedding_dim, 2) * (- math.log(1e4) / embedding_dim))  # 使用exp和log实现幂运算 [1,embedding_dim/2]
-        pe[:, 0:: 2] = torch.sin(position, div_term)  # 隔行处理
-        pe[:, 1:: 2] = torch.cos(position, div_term)
+        pe[:, 0:: 2] = torch.sin(position * div_term)  # 隔行处理
+        pe[:, 1:: 2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)  # 增加批次维度，[1, max_len, embedding_dim]
         self.register_buffer('pe', pe)  # 将位置编码矩阵注册为buffer(不参加训练)
 
@@ -212,7 +218,8 @@ class DecoderLayer(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, tgt_vocab_size, embedding_dim, N, heads, dropout,device):
-        super(Decoder, self).__init__()
+        super(Decoder, self).__ini
+        t__()
         self.tgt_emb = nn.Embedding(tgt_vocab_size, embedding_dim)  # Decoder词表
         self.pos_emb = PositionalEncoding(embedding_dim, dropout=dropout)
         self.layers = nn.ModuleList([DecoderLayer(embedding_dim, heads,device) for _ in range(N)])
@@ -270,11 +277,10 @@ class Transformer(nn.Module):
         dec_inputs: [batch_size, tgt_len]
         """
         # tensor to store decoder outputs
-        # outputs = torch.zeros(batch_size, tgt_len, tgt_vocab_size).to(self.device)
-        # enc_outputs: [batch_size, src_len, embedding_dim], enc_self_attns: [n_layers, batch_size, n_heads, src_len, src_len]
+        # enc_outputs: [batch_size, src_len, embedding_dim],
         # 经过Encoder网络后，得到的输出还是[batch_size, src_len, embedding_dim]
         en_outputs= self.encoder(src)
-        # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attns: [n_layers, batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [n_layers, batch_size, tgt_len, src_len]
+        # dec_outputs: [batch_size, tgt_len, d_model]
         de_outputs= self.decoder(target, src, en_outputs)
         # dec_outputs: [batch_size, tgt_len, d_model] -> dec_logits: [batch_size, tgt_len, tgt_vocab_size]
         dec_logits = self.classifier(de_outputs)
@@ -314,6 +320,14 @@ def make_target(data_en, data_de,data_target, ndata):
         target = torch.LongTensor(target)
         yield en_src,de_src, target  # 输入 输出  正确结果
 
+def make_test(data_en,ndata):
+    l = list(range(ndata))
+    random.shuffle(l)
+    for i in l:
+        en_src = data_en[str(i)][:]
+        en_src = torch.LongTensor(en_src)
+        yield en_src  # 输入 输出  正确结果
+
 
 def train(args: Dict):
     model_save_path = args['--model_save_path']
@@ -347,7 +361,7 @@ def train(args: Dict):
         # optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.99)  # 用adam的话效果不好
         optimizer = torch.optim.Adam(model.parameters(),betas = (0.9, 0.98),eps = 1e-09)  # 优化函数初始化 学习率
         # 学习率更新
-        scheduler = get_schedule(optimizer, warmup_steps=4000,embedding_dim=int(args['--embedding_dim']))  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
+        scheduler = get_schedule(optimizer=optimizer, warmup_steps=4000,embedding_dim=int(args['--embedding_dim']))  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
 
         cuda = 0
         print('start training')
@@ -369,72 +383,76 @@ def train(args: Dict):
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
-                    scheduler.step(loss)
+                    scheduler.step()
                     print('This is bleu_score:', bleu_score) #计算bleu值
                     bleu_score = 0
                 if cuda % 100 == 0:  # 打印loss
                     print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ',
-                          '{:.6f}'.format(loss),'bleu_score=',bleu_score)
+                          '{:.6f}'.format(loss/nword_en),'bleu_score=',bleu_score)
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
 
+def read(filename):
+    with open(filename, "rb") as file:  # 读数据
+        words = eval(file.readline().strip().decode("utf-8"))
+    return words
+
 def decode(args: Dict):
     model_path = args['--model_path']
-    with open(args['--en_dict'], "rb") as file:  # 读数据
-        words_en = eval(file.readline().strip().decode("utf-8"))
+    words_en = read(args['--en_dict'])
     words_re_en = {i: w for w, i in words_en.items()}
-    with open(args['--de_dict'], "rb") as file:  # 读数据
-        words_de = eval(file.readline().strip().decode("utf-8"))
-    words_re_de = {i: w for w, i in words_de.items()}
-    with open(args['--target_dict'], "rb") as file:  # 读数据
-        words_target = eval(file.readline().strip().decode("utf-8"))
+    words_target = read(args['--target_dict'])
     words_re_target = {i: w for w, i in words_target.items()}
-    input = [words_en[i] for i in input]
 
     model = Transformer.load(model_path)
     model.eval()
-
+    de_predict = []
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
+    with h5py.File(args['--en'], 'r') as f:
+        nword_en = f['nword'][()]
+        ndata = f['ndata'][()]
+        data_en = f['group']
+        torch.manual_seed(0)  # 固定随机种子
+        for en_src in make_test(data_en, ndata):
+            if args['--cuda']:
+                en_src = en_src.to(device)
+            en_outputs = model.encoder(en_src)
+            de_input = torch.zeros(en_src.size(0), 0).type_as(en_src.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
+            flag = False
+            next_symbol = torch.tensor([[words_en["<sos>"]] for i in range(en_src.size(0))])
+            flag_test = [0 for i in range(en_src.size(0))]
+            flag_true = [1 for i in range(en_src.size(0))]
+            while not terminal:
+                # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
+                de_input = torch.cat([de_input.to(device), torch.tensor([[next_symbol]], dtype=en_src.dtype).to(device)],-1)
+                de_outputs= model.decoder(de_input, en_src, en_outputs)
+                de_outputs = model.classifier(de_outputs)
+                result= torch.argmax(dec_outputs,dim=-1, keepdim=False)
+                next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
+                next_symbol = next_word
+                for i in range(en_src.size(0)):
+                    if next_word[i].item() == words_target["<eos>"]:
+                        flag_test[i] = 1
+                if flag_test == flag_true:
+                    flag = True
+                print(next_word)
+            de_predict.append(de_input)  # 把结果存入
+    with h5py.File("result_test_de.hdf5", 'w') as f:
+        group = f.create_group("group")
+        l = len(de_predict)
+        for i in range(l):
+            group.create_dataset(str(i), data=de_predict[i])
+        f["ndata"] = np.array(l, dtype=np.int32)
 
-    enc_outputs, enc_self_attns = model.encoder(enc_input)
-    dec_input = torch.zeros(1, 0).type_as(enc_input.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
-    terminal = False
-    fun = 1
-    next_symbol = start_symbol
-    # print(1)
-    while not terminal:
-        # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
-        dec_input = torch.cat([dec_input.to(device), torch.tensor([[next_symbol]], dtype=enc_input.dtype).to(device)],
-                              -1)
-        dec_outputs, _, _ = model.decoder(dec_input, enc_input, enc_outputs)
-        projected = model.projection(dec_outputs)
-        prob = projected.squeeze(0).max(dim=-1, keepdim=False)[1]
-        # 增量更新（我们希望重复单词预测结果是一样的）
-        # 我们在预测是会选择性忽略重复的预测的词，只摘取最新预测的单词拼接到输入序列中
-        next_word = prob.data[-1]  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
-        next_symbol = next_word
-        # if next_symbol == tgt_vocab["E"]:
-        #     terminal = True
-        # print(next_word)
-        if fun == 10:
-            terminal = True
-        fun = fun + 1
 
-    # greedy_dec_predict = torch.cat(
-    #     [dec_input.to(device), torch.tensor([[next_symbol]], dtype=enc_input.dtype).to(device)],
-    #     -1)
-    greedy_dec_predict = dec_input[:, 1:]
-    return greedy_dec_predict
-
-
-def get_schedule(self,optimizer, warmup_steps, embedding_dim, last_epoch=-1):
+def get_schedule(optimizer, warmup_steps, embedding_dim, last_epoch=-1):
 
     def lr_lambda(current_step):
         current_step += 1
-        return (d_model ** -0.5) * min(current_step ** -0.5, current_step * (num_warmup_steps ** -1.5))
+        return (embedding_dim ** -0.5) * min(current_step ** -0.5, current_step * (warmup_steps ** -1.5))
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
@@ -461,3 +479,4 @@ if __name__ == "__main__":
         raise RuntimeError('invalid run mode')
 
 # python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
+# python ..\GIT\train.py --cuda=0 decode --model_path="model_trans" --en="result_test_en.hdf5" --target_dict="dict_target.txt"
