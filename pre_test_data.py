@@ -15,7 +15,14 @@ def Sort_en(filename1, filename2):
                 m = ' <eos>'
                 file1.write(''.join([n, temp, m]))
                 file1.write('\n')
-
+def Sort_target(filename1, filename2):
+    with open(filename2, "w", encoding='utf-8') as file1:
+        with open(filename1, "r", encoding='utf-8') as file:
+            for line in file:
+                temp = line.strip()
+                m = ' <eos>'
+                file1.write(''.join([temp, m]))
+                file1.write('\n')
 # 4、词频统计：收集数据集上的词典，建立单词到索引的一对一映射并保存结果，（0索引对应padding，其它单词的索引从1开始累加，单词顺序从高频到低频）；
 
 def load(fileName):
@@ -102,6 +109,7 @@ def save(words_en, file_en, f5_en, batch_size):
 
 if __name__ == "__main__":
     Sort_en(sys.argv[1], sys.argv[2])  # BPE BPE_sort en
+    Sort_target(sys.argv[5], sys.argv[6])
     print(1)
     words_en = load(sys.argv[3])  # BPE_sort dict  en
     print(2)
@@ -113,4 +121,4 @@ if __name__ == "__main__":
     print(4)
 
 # python ..\GIT\pre_test_data.py test.tc.en test_sort_en.txt dict_en.txt result_en_test.hdf5
-# python pre_test_data.py test.BPE.en test_sort_en.txt dict_en.txt result_en_test.hdf5
+# python pre_test_data.py test.BPE.en test_sort_en.txt dict_en.txt result_en_test.hdf5 test.BPE.de test_sort_de.txt
