@@ -440,12 +440,14 @@ def decode(args: Dict):
                     flag = True
                 print(next_word)
             de_predict.append(de_input)  # 把结果存入
-    with h5py.File("result_test_de.hdf5", 'w') as f:
-        group = f.create_group("group")
+    with open("result_test_de.txt", 'w') as file:
         l = len(de_predict)
+        temp = ""
         for i in range(l):
-            group.create_dataset(str(i), data=de_predict[i])
-        f["ndata"] = np.array(l, dtype=np.int32)
+            for j in range(de_predict[i].size(0)):
+                for k in range(de_predict[i].size(1)):
+                    temp = temp + str(words_re_target[de_predict[i][j][k].item()]) + ' '
+            file.write(temp + '\n')
 
 
 def get_schedule(optimizer, warmup_steps, embedding_dim, last_epoch=-1):
@@ -479,4 +481,4 @@ if __name__ == "__main__":
         raise RuntimeError('invalid run mode')
 
 # python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
-# python ..\GIT\train.py --cuda=0 decode --model_path="model_trans" --en="result_test_en.hdf5" --target_dict="dict_target.txt"
+# python train_new.py --cuda=0 decode --model_path="model_trans" --en="result_test_en.hdf5" --target_dict="dict_target.txt"
