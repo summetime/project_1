@@ -13,8 +13,11 @@ for lang in $src $tgt; do
     grep '<seg id' test-full/newstest2014-deen-$t.$lang.sgm > t_$t.$lang.1.txt
         sed -e 's/<seg id="[0-9]*">\s*//g' t_$t.$lang.1.txt > t_$t.$lang.2.txt      
         sed -e 's/\s*<\/seg>\s*//g' t_$t.$lang.2.txt > t_$t.$lang.3.txt
-        sed -e "s/\’/\'/g" t_$t.$lang.3.txt > t_$t.$lang.4.txt
-    perl moses/mosesdecoder/scripts/tokenizer/normalize-punctuation.perl -l $lang  | \
+        sed -e "s/\’/\'/g" t_$t.$lang.3.txt > t_$lang.txt
+    echo "ti qu成功"
+done
+for lang in $src $tgt; do   
+    perl moses/mosesdecoder/scripts/tokenizer/normalize-punctuation.perl -l $lang t_$lang.txt | \
     perl moses/mosesdecoder/scripts/tokenizer/tokenizer.perl -a -l $lang  > test.$lang       # 分词
     echo "Tokenise成功"
 done
