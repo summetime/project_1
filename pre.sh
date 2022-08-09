@@ -3,18 +3,18 @@ echo "pre-processing test data..."      # 预处理测试语料
 src=en
 tgt=de
 #
-for l in $src $tgt; do
-    if [ "$l" == "$src" ]; then      
+for lang in $src $tgt; do
+    if [ "$lang" == "$src" ]; then      
         t="src"
     else
         t="ref"
     fi
-    grep '<seg id' test-full/newstest2014-deen-$t.$l.sgm | \      #这一块操作没看懂
-        sed -e 's/<seg id="[0-9]*">\s*//g' | \      
-        sed -e 's/\s*<\/seg>\s*//g' | \
-        sed -e "s/\’/\'/g" | \
-    perl moses/mosesdecoder\scripts\tokenizer\normalize-punctuation.perl -l $l | \
-    perl moses/mosesdecoder\scripts\tokenizer\tokenizer.perl -a -l $l > test.$l      # 分词
+    grep '<seg id' test-full/newstest2014-deen-$t.$lang.sgm > t_$t.$lang.1.txt
+        sed -e 's/<seg id="[0-9]*">\s*//g' t_$t.$lang.1.txt > t_$t.$lang.2.txt      
+        sed -e 's/\s*<\/seg>\s*//g' t_$t.$lang.2.txt > t_$t.$lang.3.txt
+        sed -e "s/\’/\'/g" t_$t.$lang.3.txt > t_$t.$lang.4.txt
+    perl moses/mosesdecoder\scripts\tokenizer\normalize-punctuation.perl -l $lang  | \
+    perl moses/mosesdecoder\scripts\tokenizer\tokenizer.perl -a -l $lang  > test.$lang       # 分词
     echo "Tokenise成功"
 done
 
@@ -23,6 +23,11 @@ for lang in $src $tgt; do
   perl moses/mosesdecoder/scripts/recaser/train-truecaser.perl -corpus test.$lang -model truecase-test.$lang
   perl moses/mosesdecoder/scripts/recaser/truecase.perl -model truecase-test.$lang < test.$lang > test.tc.$lang
   echo "truecase成功"
+done
+
+## Tidy up and compress
+for lang in $src $tgt; do
+  rm -f t_src.$lang.1.txt t_src.$lang.2.txt t_src.$lang.3.txt t_src.$lang.4.txt t_ref.$lang.1.txt t_ref.$lang.2.txt t_ref.$lang.3.txt t_ref.$lang.4.txt
 done
 
 ### bpe
