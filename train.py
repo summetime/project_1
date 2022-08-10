@@ -58,12 +58,13 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
+        self.drop = nn.Dropout(0.1)
         self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        output = self.norm(output + residual)
+        output = self.norm(self.drop(output) + residual)
         return output.to(self.device) # [bsize, seql, embedding_dim]
         # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
@@ -110,6 +111,7 @@ class MultiHeadAttention(nn.Module):
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
         self.norm = nn.LayerNorm(embedding_dim)
+        self.drop = nn.Dropout(0.1)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -126,7 +128,7 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        output = self.norm(output + residual)
+        output = self.norm(self.drop(output) + residual)
         return output.to(self.device)
         # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
@@ -218,8 +220,7 @@ class DecoderLayer(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, tgt_vocab_size, embedding_dim, N, heads, dropout,device):
-        super(Decoder, self).__ini
-        t__()
+        super(Decoder, self).__init__()
         self.tgt_emb = nn.Embedding(tgt_vocab_size, embedding_dim)  # Decoder词表
         self.pos_emb = PositionalEncoding(embedding_dim, dropout=dropout)
         self.layers = nn.ModuleList([DecoderLayer(embedding_dim, heads,device) for _ in range(N)])
@@ -241,7 +242,7 @@ class Decoder(nn.Module):
 
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
         dec_self_attn_mask = torch.gt((dec_self_attn_mask + enc_attn_mask),
-                                      0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回1，否则返回0
+                                      0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回，否则返回0
 
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
@@ -282,9 +283,9 @@ class Transformer(nn.Module):
         en_outputs= self.encoder(src)
         # dec_outputs: [batch_size, tgt_len, d_model]
         de_outputs= self.decoder(target, src, en_outputs)
-        # dec_outputs: [batch_size, tgt_len, d_model] -> dec_logits: [batch_size, tgt_len, tgt_vocab_size]
-        dec_logits = self.classifier(de_outputs)
-        return dec_logits
+        # dec_outputs: [batch_size, tgt_len, d_model] -> [batch_size, tgt_len, tgt_vocab_size]
+        de_outputs = self.classifier(de_outputs)
+        return de_outputs
 
     @staticmethod
     def load(model_path: str):
@@ -292,7 +293,7 @@ class Transformer(nn.Module):
         args = params['args']
 
         model = Transformer(**args)
-        model.load_state_dict(params['state_dict'])  # 加载之前存储的数据
+        model.load_state_dict(params['state_dict'],False)  # 加载之前存储的数据
 
         return model
 
@@ -355,13 +356,14 @@ def train(args: Dict):
         if args['--cuda']:
             model = model.to(device)  # 放置数据
         Loss = nn.CrossEntropyLoss(ignore_index=0, reduction='sum')  # 损失函数初始化
+
         if args['--cuda']:
             Loss = Loss.to(device)
 
         # optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.99)  # 用adam的话效果不好
         optimizer = torch.optim.Adam(model.parameters(),betas = (0.9, 0.98),eps = 1e-09)  # 优化函数初始化 学习率
         # 学习率更新
-        scheduler = get_schedule(optimizer=optimizer, warmup_steps=4000,embedding_dim=int(args['--embedding_dim']))  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
+        scheduler = get_schedule(optimizer=optimizer, warmup_steps=8000,embedding_dim=int(args['--embedding_dim']))  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
 
         cuda = 0
         print('start training')
@@ -376,6 +378,10 @@ def train(args: Dict):
                 # forward
                 cuda += 1
                 out = model(en_src, de_src)
+                log_pre = torch.log(out)
+                labels = F.softmax(target)
+                kl = F.kl_div(log_pre, labels, reduction='batchmean')
+                print('kl:',kl)
                 loss = Loss(out.transpose(1,2), target)
                 output = torch.argmax(out, dim=-1)
                 bleu_score += bleu(target, output, device)
@@ -407,6 +413,7 @@ def decode(args: Dict):
 
     model = Transformer.load(model_path)
     model.eval()
+    print("模型读取成功：")
     de_predict = []
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
     print('use device: %s' % device, file=sys.stderr)
@@ -420,19 +427,24 @@ def decode(args: Dict):
             if args['--cuda']:
                 en_src = en_src.to(device)
             en_outputs = model.encoder(en_src)
+            print('en_outputs:',en_outputs)
             de_input = torch.zeros(en_src.size(0), 0).type_as(en_src.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
             flag = False
             next_symbol = torch.tensor([[words_en["<sos>"]] for i in range(en_src.size(0))])
+            print('1',next_symbol)
             flag_test = [0 for i in range(en_src.size(0))]
             flag_true = [1 for i in range(en_src.size(0))]
-            while not terminal:
+            while not flag:
                 # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
-                de_input = torch.cat([de_input.to(device), torch.tensor([[next_symbol]], dtype=en_src.dtype).to(device)],-1)
+                de_input = torch.cat([de_input.to(device), next_symbol.to(device)].to(device),-1)
+                print('de_input:',de_input)
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
+                print('de_outputs:', de_outputs)
                 de_outputs = model.classifier(de_outputs)
                 result= torch.argmax(dec_outputs,dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
                 next_symbol = next_word
+                print('2:',next_symbol)
                 for i in range(en_src.size(0)):
                     if next_word[i].item() == words_target["<eos>"]:
                         flag_test[i] = 1
@@ -481,4 +493,4 @@ if __name__ == "__main__":
         raise RuntimeError('invalid run mode')
 
 # python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
-# python train_new.py --cuda=0 decode --model_path="model_trans" --en="result_test_en.hdf5" --target_dict="dict_target.txt"
+# python train_new.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --target_dict="dict_target.txt"
