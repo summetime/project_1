@@ -58,15 +58,15 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
-        self.drop = nn.Dropout(0.1)
-        self.norm = nn.LayerNorm(embedding_dim)
+        # self.drop = nn.Dropout(0.1)
+        # self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        output = self.norm(self.drop(output) + residual)
-        return output.to(self.device) # [bsize, seql, embedding_dim]
-        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
+        # output = self.norm(self.drop(output) + residual)
+        # return output.to(self.device) # [bsize, seql, embedding_dim]
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
@@ -89,8 +89,12 @@ class Mask():
         """
         seq: [batch_size, tgt_len]
         """
+        print(seq.size())
+        print("test1")
         subsequence_mask = np.triu(np.ones((seq.size(0), seq.size(1), seq.size(1))),k=1)  # 生成一个上三角矩阵 [batch_size, tgt_len, tgt_len]
+        print("test2")
         subsequence_mask = torch.from_numpy(subsequence_mask).byte()  # 数组换成tensor
+        print("test3")
         return subsequence_mask  # [batch_size, tgt_len, tgt_len]
 
 
@@ -110,8 +114,8 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
-        self.norm = nn.LayerNorm(embedding_dim)
-        self.drop = nn.Dropout(0.1)
+        # self.norm = nn.LayerNorm(embedding_dim)
+        # self.drop = nn.Dropout(0.1)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -128,9 +132,9 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        output = self.norm(self.drop(output) + residual)
-        return output.to(self.device)
-        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
+        # output = self.norm(self.drop(output) + residual)
+        # return output.to(self.device)
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -237,21 +241,23 @@ class Decoder(nn.Module):
         dec_outputs = self.pos_emb(dec_outputs.transpose(0, 1)).transpose(0, 1).to(self.device)  # [batch_size, tgt_len, embedding]
         # Decoder输入序列的pad mask矩阵（这个例子中decoder是没有加pad的，实际应用中都是有pad填充的）
         enc_attn_mask = self.mask.en_mask(dec_inputs, dec_inputs).to(self.device)  # [batch_size, tgt_len, tgt_len]
+        print('123',enc_attn_mask)
         # Masked Self_Attention：当前时刻是看不到未来的信息的
         dec_self_attn_mask = self.mask.de_mask(dec_inputs).to(self.device)  # [batch_size, tgt_len, tgt_len]
-
+        print("decoder1")
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
-        dec_self_attn_mask = torch.gt((dec_self_attn_mask + enc_attn_mask),
-                                      0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回，否则返回0
-
+        dec_self_attn_mask = torch.gt((dec_self_attn_mask + enc_attn_mask),0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回，否则返回0
+        print("decoder2")
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
         #                       dec_inputs只是提供expand的size的
+        print("decoder3")
         dec_enc_attn_mask = self.mask.en_mask(dec_inputs, enc_inputs)  # [batc_size, tgt_len, src_len]
 
         for layer in self.layers:
             # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attn: [batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [batch_size, h_heads, tgt_len, src_len]
             # Decoder的Block是上一个Block的输出dec_outputs（变化）和Encoder网络的输出enc_outputs（固定）
+            print("decoder4")
             dec_outputs = layer(dec_outputs, enc_outputs, dec_self_attn_mask,dec_enc_attn_mask)
         # dec_outputs: [batch_size, tgt_len, d_model]
         return dec_outputs
@@ -360,7 +366,6 @@ def train(args: Dict):
         if args['--cuda']:
             Loss = Loss.to(device)
 
-        # optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.99)  # 用adam的话效果不好
         optimizer = torch.optim.Adam(model.parameters(),betas = (0.9, 0.98),eps = 1e-09)  # 优化函数初始化 学习率
         # 学习率更新
         scheduler = get_schedule(optimizer=optimizer, warmup_steps=8000,embedding_dim=int(args['--embedding_dim']))  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
@@ -436,8 +441,9 @@ def decode(args: Dict):
             flag_true = [1 for i in range(en_src.size(0))]
             while not flag:
                 # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
-                de_input = torch.cat([de_input.to(device), next_symbol.to(device)].to(device),-1)
+                de_input = torch.cat([de_input.to(device), next_symbol.to(device)],-1).to(device)
                 print('de_input:',de_input)
+                print('de_input:',de_input.size(),'en_src:',en_src.size(),'en_outputs:',en_outputs.size())
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
                 print('de_outputs:', de_outputs)
                 de_outputs = model.classifier(de_outputs)
@@ -493,4 +499,4 @@ if __name__ == "__main__":
         raise RuntimeError('invalid run mode')
 
 # python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
-# python train_new.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --target_dict="dict_target.txt"
+# python train.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --en_dict="dict_en.txt" --target_dict="dict_target.txt"
