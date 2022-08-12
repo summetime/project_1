@@ -34,8 +34,7 @@ class ScaledDotProductAttention(nn.Module):
         s = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(d_k)  # scores : [batch_size, n_heads, len_q, len_k]
         # mask矩阵填充s（用-1e9填充s中与mask中值为1位置相对应的元素）
         # mask掉那些为了padding长度增加的token，让其通过softmax计算后为0
-        if mask is not None:
-            s = s.masked_fill(mask == 0, -1e9)
+        s = s.masked_fill(mask, -1e9)
 
         p = F.softmax(s, dim=-1)  # 对最后一个维度(v)做softmax
         # s : [batch_size, n_heads, len_q, len_k] * V: [batch_size, n_heads, len_v(=len_k), d_v]
@@ -48,8 +47,6 @@ class FeedForward(nn.Module):
 
     def __init__(self, embedding_dim, device, d_ff=2048):
         super().__init__()
-
-        self.embed = embedding_dim
         self.device = device
 
         # We set d_ff as a default to 2048
@@ -58,15 +55,13 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
-        self.drop = nn.Dropout(0.1)
         self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        output = self.norm(self.drop(output) + residual)
+        output = self.norm(output + residual)
         return output.to(self.device) # [bsize, seql, embedding_dim]
-        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
@@ -111,7 +106,6 @@ class MultiHeadAttention(nn.Module):
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
         self.norm = nn.LayerNorm(embedding_dim)
-        self.drop = nn.Dropout(0.1)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -128,9 +122,8 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        output = self.norm(self.drop(output) + residual)
+        output = self.norm(output + residual)
         return output.to(self.device)
-        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -282,7 +275,7 @@ class Transformer(nn.Module):
         # dec_outputs: [batch_size, tgt_len, d_model]
         de_outputs= self.decoder(target, src, en_outputs)
         # dec_outputs: [batch_size, tgt_len, d_model] -> [batch_size, tgt_len, tgt_vocab_size]
-        de_outputs = F.softmax(self.classifier(de_outputs))
+        de_outputs = self.classifier(de_outputs)
         return de_outputs
 
     @staticmethod
@@ -327,6 +320,15 @@ def make_test(data_en,ndata):
         en_src = torch.LongTensor(en_src)
         yield en_src  # 输入 输出  正确结果
 
+def bleu(reference,candidate,device):
+    score = 0
+    reference = reference.cpu().detach().numpy().tolist()
+    candidate = candidate.cpu().detach().numpy().tolist()
+    l = len(candidate)
+    for i in range(l):
+        score += sentence_bleu([reference[i]], candidate[i],weights=[0.25,0.25,0.25,0.25])
+    return score
+
 
 def train(args: Dict):
     model_save_path = args['--model_save_path']
@@ -353,10 +355,12 @@ def train(args: Dict):
         print('use device: %s' % device, file=sys.stderr)
         if args['--cuda']:
             model = model.to(device)  # 放置数据
-        Loss = nn.CrossEntropyLoss(ignore_index=0, reduction='sum')  # 损失函数初始化
+        Loss = nn.CrossEntropyLoss(ignore_index=0, reduction='mean')  # 损失函数初始化
+        # KL = nn.KLDivLoss(reduction="batchmean")
 
         if args['--cuda']:
             Loss = Loss.to(device)
+            # KL = KL.to(device)
 
         optimizer = torch.optim.Adam(model.parameters(),betas = (0.9, 0.98),eps = 1e-09)  # 优化函数初始化 学习率
         # 学习率更新
@@ -375,23 +379,21 @@ def train(args: Dict):
                 # forward
                 cuda += 1
                 out = model(en_src, de_src)
-                # log_pre = torch.log(out)
-                # labels = F.softmax(target)
-                # kl = F.kl_div(log_pre, labels, reduction='batchmean')
+                # log_pre = F.log_softmax(out,dim=-1)
+                # kl = Kl(log_pre, target)
                 # print('kl:',kl)
                 loss = Loss(out.transpose(1,2), target)
                 output = torch.argmax(out, dim=-1)
-                bleu_score += bleu(target, output, device)
+                bleu_score = bleu(target, output, device)
                 loss.backward()
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                     scheduler.step()
                     print('This is bleu_score:', bleu_score) #计算bleu值
-                    bleu_score = 0
                 if cuda % 100 == 0:  # 打印loss
                     print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ',
-                          '{:.6f}'.format(loss/nword_en),'bleu_score=',bleu_score)
+                          '{:.6f}'.format(loss))
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
                     model.save(model_save_path)
@@ -432,7 +434,7 @@ def decode(args: Dict):
             print('index:',index)
             flag_test = [0 for i in range(en_src.size(0))]
             flag_true = [1 for i in range(en_src.size(0))]
-            while not flag or ff <= 100:
+            while not flag and ff <= 50:
                 # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
                 de_input = torch.cat([de_input.to(device), next_symbol.to(device)],-1).to(device)
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
@@ -440,6 +442,8 @@ def decode(args: Dict):
                 result= torch.argmax(de_outputs,dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
                 next_symbol = next_word
+                print(next_word)
+                print(ff)
                 ff += 1
                 for i in range(en_src.size(0)):
                     if next_word[i].item() == words_target["<eos>"]:
@@ -466,14 +470,6 @@ def get_schedule(optimizer, warmup_steps, embedding_dim, last_epoch=-1):
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
-def bleu(reference,candidate,device):
-    score = 0
-    reference = reference.cpu().detach().numpy().tolist()
-    candidate = candidate.cpu().detach().numpy().tolist()
-    l = len(candidate)
-    for i in range(l):
-        score += sentence_bleu([reference[i]], candidate[i],weights=[0.25,0.25,0.25,0.25])
-    return score
 
 if __name__ == "__main__":
     args = docopt(__doc__)
@@ -486,6 +482,6 @@ if __name__ == "__main__":
     else:
         raise RuntimeError('invalid run mode')
 
-# python train_new.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
+# python train_new.py --cuda=1 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="transformer.pkl" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
 # python train.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --en_dict="dict_en.txt" --target_dict="dict_target.txt"
 # python train.py --cuda=0 train --en="result_en1.hdf5" --de="result_de1.hdf5" --target="result_target1.hdf5" --model_save_path="model1.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
