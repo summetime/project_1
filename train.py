@@ -364,8 +364,8 @@ def read(filename):
 
 def decode(args: Dict):
     model_path = args['--model_path']
-    words_en = read("dict_en.txt")
-    words_re_en = {i: w for w, i in words_en.items()}
+    words_de = read("dict_de.txt")
+    words_re_de = {i: w for w, i in words_de.items()}
     words_target = read("dict_target.txt")
     words_re_target = {i: w for w, i in words_target.items()}
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")
@@ -383,8 +383,7 @@ def decode(args: Dict):
         for en_src in make_test(data_en, ndata):
             if args['--cuda']:
                 en_src = en_src.to(device)
-            next_symbol = torch.tensor([[words_en["<sos>"]] for i in range(en_src.size(0))])
-            print('1', next_symbol)
+            next_symbol = torch.tensor([[words_de["<sos>"]] for i in range(en_src.size(0))])
             flag_test = [0 for i in range(en_src.size(0))]
             flag_true = [1 for i in range(en_src.size(0))]
             en_outputs = model.encoder(en_src)
@@ -398,7 +397,6 @@ def decode(args: Dict):
                 result= torch.argmax(dec_outputs,dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
                 next_symbol = next_word
-                print('2:',next_symbol)
                 for i in range(en_src.size(0)):
                     if next_word[i].item() == words_target["<eos>"]:
                         flag_test[i] = 1
