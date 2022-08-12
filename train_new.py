@@ -282,7 +282,7 @@ class Transformer(nn.Module):
         # dec_outputs: [batch_size, tgt_len, d_model]
         de_outputs= self.decoder(target, src, en_outputs)
         # dec_outputs: [batch_size, tgt_len, d_model] -> [batch_size, tgt_len, tgt_vocab_size]
-        de_outputs = self.classifier(de_outputs)
+        de_outputs = F.softmax(self.classifier(de_outputs))
         return de_outputs
 
     @staticmethod
@@ -394,6 +394,7 @@ def train(args: Dict):
                           '{:.6f}'.format(loss/nword_en),'bleu_score=',bleu_score)
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
+                    torch.save(model.state_dict(), "/home1/xywang/data/moses_data/en-de/trans_model.pkl")  # 只存参数
                     model.save(model_save_path)
 
 def read(filename):
@@ -408,14 +409,9 @@ def decode(args: Dict):
     words_target = read(args['--target_dict'])
     words_re_target = {i: w for w, i in words_target.items()}
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")
-    model = Transformer.load(model_path)
+    model = torch.load(model_path)
+    # model = Transformer.load(model_path)
     print("模型读取成功")
-    model_dict = model.state_dict()
-    print(model_dict)
-    for k, v in model_dict.items():
-        model_dict[k]= v.to(device)
-    print(model_dict)
-    model.load_state_dict(model_dict)
     model.eval()
     de_predict = []
 
@@ -474,6 +470,15 @@ def get_schedule(optimizer, warmup_steps, embedding_dim, last_epoch=-1):
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
+def bleu(reference,candidate,device):
+    score = 0
+    reference = reference.cpu().detach().numpy().tolist()
+    candidate = candidate.cpu().detach().numpy().tolist()
+    l = len(candidate)
+    for i in range(l):
+        score += sentence_bleu([reference[i]], candidate[i],weights=[0.25,0.25,0.25,0.25])
+    return score
+
 if __name__ == "__main__":
     args = docopt(__doc__)
     if args['--cuda']:
@@ -485,6 +490,6 @@ if __name__ == "__main__":
     else:
         raise RuntimeError('invalid run mode')
 
-# python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
+# python train_new.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
 # python train.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --en_dict="dict_en.txt" --target_dict="dict_target.txt"
 # python train.py --cuda=0 train --en="result_en1.hdf5" --de="result_de1.hdf5" --target="result_target1.hdf5" --model_save_path="model1.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1

@@ -1,7 +1,7 @@
 # wxy
 '''Usage:
-    train.py --cuda=<int> train --en="" --de="" --target="" --model_save_path="" --embedding_dim=<int> --N=<int> --heads=<int> --dropout=<float>  [options]
-    train.py --cuda=<int> decode --model_path="" --en="" --en_dict="" --target_dict=""
+    train.py --cuda=<int> train --model_path = ""
+    train.py --cuda=<int> decode --model_path = ""
 '''
 import torch
 import torch.nn as nn
@@ -58,11 +58,15 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
+        self.drop = nn.Dropout(0.1)
+        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
+        output = self.norm(self.drop(output) + residual)
+        return output.to(self.device) # [bsize, seql, embedding_dim]
+        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
@@ -85,12 +89,8 @@ class Mask():
         """
         seq: [batch_size, tgt_len]
         """
-        print(seq.size())
-        print("test1")
         subsequence_mask = np.triu(np.ones((seq.size(0), seq.size(1), seq.size(1))),k=1)  # 生成一个上三角矩阵 [batch_size, tgt_len, tgt_len]
-        print("test2")
         subsequence_mask = torch.from_numpy(subsequence_mask).byte()  # 数组换成tensor
-        print("test3")
         return subsequence_mask  # [batch_size, tgt_len, tgt_len]
 
 
@@ -110,6 +110,8 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
+        self.norm = nn.LayerNorm(embedding_dim)
+        self.drop = nn.Dropout(0.1)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -126,7 +128,9 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
+        output = self.norm(self.drop(output) + residual)
+        return output.to(self.device)
+        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -149,7 +153,6 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
-
 
 class EncoderLayer(nn.Module):
 
@@ -259,16 +262,9 @@ class Transformer(nn.Module):
 
     def __init__(self, src_vocab, target_vocab, embedding_dim, N, heads, dropout, device):
         super().__init__()
-        self.s_vocab = src_vocab
-        self.t_vocab = target_vocab
-        self.embed = embedding_dim
-        self.N = N
-        self.heads = heads
-        self.dropout = dropout
         self.encoder = Encoder(src_vocab, embedding_dim, N, heads, dropout,device).to(device)
         self.decoder = Decoder(target_vocab, embedding_dim, N, heads, dropout,device).to(device)
         self.classifier = nn.Linear(embedding_dim, target_vocab,bias=False).to(device)
-        self.device = device
 
     def forward(self, src, target):
         """Transformers的输入：两个序列
@@ -284,26 +280,6 @@ class Transformer(nn.Module):
         # dec_outputs: [batch_size, tgt_len, d_model] -> [batch_size, tgt_len, tgt_vocab_size]
         de_outputs = self.classifier(de_outputs)
         return de_outputs
-
-    @staticmethod
-    def load(model_path: str):
-        params = torch.load(model_path, map_location=lambda storage, loc: storage)
-        args = params['args']
-
-        model = Transformer(**args)
-        model.load_state_dict(params['state_dict'], False)  # 加载之前存储的数据
-
-        return model
-
-    def save(self, path: str):
-        print('save model parameters to [%s]' % path, file=sys.stderr)
-
-        params = {  # 相应参数的设定
-            'args': dict(src_vocab=self.s_vocab, target_vocab=self.t_vocab, embedding_dim=self.embed, N=self.N,
-                         heads=self.heads, dropout=self.dropout, device=self.device),
-            'state_dict': self.state_dict()
-        }
-        torch.save(params, path)
 
 
 # 返回一个batch和对应的target
@@ -329,8 +305,8 @@ def make_test(data_en,ndata):
 
 
 def train(args: Dict):
-    model_save_path = args['--model_save_path']
-    with h5py.File(args['--en'], 'r') as f1, h5py.File(args['--de'], 'r') as f2,h5py.File(args['--target'], 'r') as f3:
+    model_save_path = args['--model_path']
+    with h5py.File("result_en.hdf5", 'r') as f1, h5py.File("result_de.hdf5", 'r') as f2,h5py.File("result_target.hdf5", 'r') as f3:
         nword_en = f1['nword'][()]
         nword_de = f2['nword'][()]
         ndata = f1['ndata'][()]
@@ -341,9 +317,7 @@ def train(args: Dict):
 
         device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
 
-        model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=int(args['--embedding_dim']),
-                            N=int(args['--N']), heads=int(args['--heads']), dropout=float(args['--dropout']),
-                            device=device)  # 模型初始化
+        model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=512,N=6, heads=8, dropout=0.1,device=device)  # 模型初始化
 
         model.train()
 
@@ -360,7 +334,7 @@ def train(args: Dict):
 
         optimizer = torch.optim.Adam(model.parameters(),betas = (0.9, 0.98),eps = 1e-09)  # 优化函数初始化 学习率
         # 学习率更新
-        scheduler = get_schedule(optimizer=optimizer, warmup_steps=8000,embedding_dim=int(args['--embedding_dim']))  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
+        scheduler = get_schedule(optimizer=optimizer, warmup_steps=8000,embedding_dim=512)  # 在发现loss不再降低或者acc不再提高之后，降低学习率 触发条件后lr*=factor；
 
         cuda = 0
         print('start training')
@@ -375,10 +349,6 @@ def train(args: Dict):
                 # forward
                 cuda += 1
                 out = model(en_src, de_src)
-                # log_pre = torch.log(out)
-                # labels = F.softmax(target)
-                # kl = F.kl_div(log_pre, labels, reduction='batchmean')
-                # print('kl:',kl)
                 loss = Loss(out.transpose(1,2), target)
                 output = torch.argmax(out, dim=-1)
                 bleu_score += bleu(target, output, device)
@@ -394,7 +364,7 @@ def train(args: Dict):
                           '{:.6f}'.format(loss/nword_en),'bleu_score=',bleu_score)
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
-                    model.save(model_save_path)
+                    torch.save(model.state_dict(), model_save_path)  # 只存参数
 
 def read(filename):
     with open(filename, "rb") as file:  # 读数据
@@ -403,19 +373,19 @@ def read(filename):
 
 def decode(args: Dict):
     model_path = args['--model_path']
-    words_en = read(args['--en_dict'])
+    words_en = read("dict_en.txt")
     words_re_en = {i: w for w, i in words_en.items()}
-    words_target = read(args['--target_dict'])
+    words_target = read("dict_target.txt")
     words_re_target = {i: w for w, i in words_target.items()}
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")
     #实例化定义好的模型
-    model = Transformer.load(model_path)
+    model = torch.load(model_path)
     model.eval()
     de_predict = []
 
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
-    with h5py.File(args['--en'], 'r') as f:
+    with h5py.File("result_en_test.hdf5", 'r') as f:
         nword_en = f['nword'][()]
         ndata = f['ndata'][()]
         data_en = f['group']
@@ -485,6 +455,6 @@ if __name__ == "__main__":
     else:
         raise RuntimeError('invalid run mode')
 
-# python train.py --cuda=0 train --en="result_en.hdf5" --de="result_de.hdf5" --target="result_target.hdf5" --model_save_path="model.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
+# python train.py --cuda=0 train
 # python train.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --en_dict="dict_en.txt" --target_dict="dict_target.txt"
 # python train.py --cuda=0 train --en="result_en1.hdf5" --de="result_de1.hdf5" --target="result_target1.hdf5" --model_save_path="model1.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
