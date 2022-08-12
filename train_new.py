@@ -1,7 +1,7 @@
 # wxy
 '''Usage:
     train.py --cuda=<int> train --en="" --de="" --target="" --model_save_path="" --embedding_dim=<int> --N=<int> --heads=<int> --dropout=<float>  [options]
-    train.py --cuda=<int> decode --model_path="" --en="" --en_dict="" --target_dict=""
+    train.py --cuda=<int> decode --model_path="" --en="" --de_dict="" --target_dict=""
 '''
 import torch
 import torch.nn as nn
@@ -394,7 +394,6 @@ def train(args: Dict):
                           '{:.6f}'.format(loss/nword_en),'bleu_score=',bleu_score)
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
-                    torch.save(model.state_dict(), "/home1/xywang/data/moses_data/en-de/trans_model.pkl")  # 只存参数
                     model.save(model_save_path)
 
 def read(filename):
@@ -404,13 +403,12 @@ def read(filename):
 
 def decode(args: Dict):
     model_path = args['--model_path']
-    words_en = read(args['--en_dict'])
-    words_re_en = {i: w for w, i in words_en.items()}
+    words_de = read(args['--de_dict'])
+    words_re_de = {i: w for w, i in words_de.items()}
     words_target = read(args['--target_dict'])
     words_re_target = {i: w for w, i in words_target.items()}
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")
-    model = torch.load(model_path)
-    # model = Transformer.load(model_path)
+    model = Transformer.load(model_path)
     print("模型读取成功")
     model.eval()
     de_predict = []
@@ -422,36 +420,34 @@ def decode(args: Dict):
         ndata = f['ndata'][()]
         data_en = f['group']
         torch.manual_seed(0)  # 固定随机种子
+        index = 0
         for en_src in make_test(data_en, ndata):
             if args['--cuda']:
                 en_src = en_src.to(device)
+            ff = 0
             en_outputs = model.encoder(en_src)
-            print('en_outputs:',en_outputs)
             de_input = torch.zeros(en_src.size(0), 0).type_as(en_src.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
             flag = False
-            next_symbol = torch.tensor([[words_en["<sos>"]] for i in range(en_src.size(0))])
-            print('1',next_symbol)
+            next_symbol = torch.tensor([[words_de["<sos>"]] for i in range(en_src.size(0))])
+            print('index:',index)
             flag_test = [0 for i in range(en_src.size(0))]
             flag_true = [1 for i in range(en_src.size(0))]
-            while not flag:
+            while not flag or ff <= 100:
                 # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
                 de_input = torch.cat([de_input.to(device), next_symbol.to(device)],-1).to(device)
-                print('de_input:',de_input)
-                print('de_input:',de_input.size(),'en_src:',en_src.size(),'en_outputs:',en_outputs.size())
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
-                print('de_outputs:', de_outputs)
                 de_outputs = model.classifier(de_outputs)
-                result= torch.argmax(dec_outputs,dim=-1, keepdim=False)
+                result= torch.argmax(de_outputs,dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
                 next_symbol = next_word
-                print('2:',next_symbol)
+                ff += 1
                 for i in range(en_src.size(0)):
                     if next_word[i].item() == words_target["<eos>"]:
                         flag_test[i] = 1
                 if flag_test == flag_true:
                     flag = True
-                print(next_word)
             de_predict.append(de_input)  # 把结果存入
+            index += 1
     with open("result_test_de.txt", 'w') as file:
         l = len(de_predict)
         temp = ""

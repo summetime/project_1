@@ -1,7 +1,7 @@
 # wxy
 '''Usage:
-    train.py --cuda=<int> train --model_path = ""
-    train.py --cuda=<int> decode --model_path = ""
+    train.py --cuda=<int> train --model_path=""
+    train.py --cuda=<int> decode --model_path=""
 '''
 import torch
 import torch.nn as nn
@@ -58,13 +58,12 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
-        self.drop = nn.Dropout(0.1)
         self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        output = self.norm(self.drop(output) + residual)
+        output = self.norm(output + residual)
         return output.to(self.device) # [bsize, seql, embedding_dim]
         # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
@@ -111,7 +110,6 @@ class MultiHeadAttention(nn.Module):
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
         self.norm = nn.LayerNorm(embedding_dim)
-        self.drop = nn.Dropout(0.1)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -128,7 +126,7 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        output = self.norm(self.drop(output) + residual)
+        output = self.norm(output + residual)
         return output.to(self.device)
         # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
@@ -239,20 +237,16 @@ class Decoder(nn.Module):
         # print(enc_attn_mask)
         # Masked Self_Attention：当前时刻是看不到未来的信息的
         dec_self_attn_mask = self.mask.de_mask(dec_inputs).to(self.device)  # [batch_size, tgt_len, tgt_len]
-        print("decoder1")
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
         dec_self_attn_mask = torch.gt((dec_self_attn_mask + enc_attn_mask),0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回，否则返回0
-        print("decoder2")
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
         #                       dec_inputs只是提供expand的size的
-        print("decoder3")
         dec_enc_attn_mask = self.mask.en_mask(dec_inputs, enc_inputs)  # [batc_size, tgt_len, src_len]
 
         for layer in self.layers:
             # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attn: [batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [batch_size, h_heads, tgt_len, src_len]
             # Decoder的Block是上一个Block的输出dec_outputs（变化）和Encoder网络的输出enc_outputs（固定）
-            print("decoder4")
             dec_outputs = layer(dec_outputs, enc_outputs, dec_self_attn_mask,dec_enc_attn_mask)
         # dec_outputs: [batch_size, tgt_len, d_model]
         return dec_outputs
@@ -313,8 +307,6 @@ def train(args: Dict):
         data_en = f1['group']
         data_de = f2['group']
         data_target = f3['group']
-        torch.manual_seed(0)  # 固定随机种子
-
         device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
 
         model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=512,N=6, heads=8, dropout=0.1,device=device)  # 模型初始化
@@ -327,7 +319,7 @@ def train(args: Dict):
         print('use device: %s' % device, file=sys.stderr)
         if args['--cuda']:
             model = model.to(device)  # 放置数据
-        Loss = nn.CrossEntropyLoss(ignore_index=0, reduction='sum')  # 损失函数初始化
+        Loss = nn.CrossEntropyLoss(ignore_index=0, reduction='mean')  # 损失函数初始化
 
         if args['--cuda']:
             Loss = Loss.to(device)
@@ -351,20 +343,19 @@ def train(args: Dict):
                 out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
                 output = torch.argmax(out, dim=-1)
-                bleu_score += bleu(target, output, device)
+                bleu_score = bleu(target, output, device)
                 loss.backward()
+                print('This is bleu_score:', bleu_score)  # 计算bleu值
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                     scheduler.step()
-                    print('This is bleu_score:', bleu_score) #计算bleu值
-                    bleu_score = 0
                 if cuda % 100 == 0:  # 打印loss
                     print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ',
-                          '{:.6f}'.format(loss/nword_en),'bleu_score=',bleu_score)
+                          '{:.6f}'.format(loss),'bleu_score=',bleu_score)
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
-                    torch.save(model.state_dict(), model_save_path)  # 只存参数
+                    torch.save(model, model_save_path)  # 只存参数
 
 def read(filename):
     with open(filename, "rb") as file:  # 读数据
@@ -455,6 +446,6 @@ if __name__ == "__main__":
     else:
         raise RuntimeError('invalid run mode')
 
-# python train.py --cuda=0 train
+# python train.py --cuda=1 train --model_path="transformer.pkl"
 # python train.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --en_dict="dict_en.txt" --target_dict="dict_target.txt"
 # python train.py --cuda=0 train --en="result_en1.hdf5" --de="result_de1.hdf5" --target="result_target1.hdf5" --model_save_path="model1.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
