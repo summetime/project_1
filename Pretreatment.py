@@ -192,3 +192,4 @@ if __name__ == "__main__":
 # python Pretreatment.py BPE.en BPE_sort_en.txt BPE.de BPE_sort_de.txt BPE_sort_target.txt dict_en.txt dict_de.txt dict_target.txt result_en.hdf5 result_de.hdf5 result_target.hdf5
 # python ..\GIT\Pretreatment.py commoncrawl.de-en.en sort_en.txt commoncrawl.de-en.de sort_de.txt sort_target.txt dict_en.txt dict_de.txt dict_target.txt commoncrawl_result_en.hdf5 commoncrawl_result_de.hdf5 commoncrawl_result_target.hdf5
 # python ..\GIT\Pretreatment.py en.en en.txt de.de _de.txt target.txt dict_en.txt dict_de.txt dict_target.txt test_en.hdf5 test_de.hdf5 test_result_target.hdf5
+# python Pretreatment.py test.BPE.en BPE_sort_en1.txt test.BPE.de BPE_sort_de1.txt BPE_sort_target1.txt dict_en1.txt dict_de1.txt dict_target1.txt result_en1.hdf5 result_de1.hdf5 result_target1.hdf5

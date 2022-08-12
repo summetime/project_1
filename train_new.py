@@ -58,11 +58,15 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
+        self.drop = nn.Dropout(0.1)
+        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
+        output = self.norm(self.drop(output) + residual)
+        return output.to(self.device) # [bsize, seql, embedding_dim]
+        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
@@ -85,12 +89,8 @@ class Mask():
         """
         seq: [batch_size, tgt_len]
         """
-        print(seq.size())
-        print("test1")
         subsequence_mask = np.triu(np.ones((seq.size(0), seq.size(1), seq.size(1))),k=1)  # 生成一个上三角矩阵 [batch_size, tgt_len, tgt_len]
-        print("test2")
         subsequence_mask = torch.from_numpy(subsequence_mask).byte()  # 数组换成tensor
-        print("test3")
         return subsequence_mask  # [batch_size, tgt_len, tgt_len]
 
 
@@ -110,6 +110,8 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
+        self.norm = nn.LayerNorm(embedding_dim)
+        self.drop = nn.Dropout(0.1)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -126,7 +128,9 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
+        output = self.norm(self.drop(output) + residual)
+        return output.to(self.device)
+        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -236,20 +240,16 @@ class Decoder(nn.Module):
         # print(enc_attn_mask)
         # Masked Self_Attention：当前时刻是看不到未来的信息的
         dec_self_attn_mask = self.mask.de_mask(dec_inputs).to(self.device)  # [batch_size, tgt_len, tgt_len]
-        print("decoder1")
         # Decoder中把两种mask矩阵相加（既屏蔽了pad的信息，也屏蔽了未来时刻的信息）
         dec_self_attn_mask = torch.gt((dec_self_attn_mask + enc_attn_mask),0).to(self.device)  # [batch_size, tgt_len, tgt_len]; torch.gt比较两个矩阵的元素，大于则返回，否则返回0
-        print("decoder2")
         # 这个mask主要用于encoder-decoder attention层
         # get_attn_pad_mask主要是enc_inputs的pad mask矩阵(因为enc是处理K,V的，求Attention时是用v1,v2,..vm去加权的，要把pad对应的v_i的相关系数设为0，这样注意力就不会关注pad向量)
         #                       dec_inputs只是提供expand的size的
-        print("decoder3")
         dec_enc_attn_mask = self.mask.en_mask(dec_inputs, enc_inputs)  # [batc_size, tgt_len, src_len]
 
         for layer in self.layers:
             # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attn: [batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [batch_size, h_heads, tgt_len, src_len]
             # Decoder的Block是上一个Block的输出dec_outputs（变化）和Encoder网络的输出enc_outputs（固定）
-            print("decoder4")
             dec_outputs = layer(dec_outputs, enc_outputs, dec_self_attn_mask,dec_enc_attn_mask)
         # dec_outputs: [batch_size, tgt_len, d_model]
         return dec_outputs
@@ -291,7 +291,7 @@ class Transformer(nn.Module):
         args = params['args']
 
         model = Transformer(**args)
-        model.load_state_dict(params['state_dict'], False)  # 加载之前存储的数据
+        model.load_state_dict(params['state_dict'],False)  # 加载之前存储的数据
 
         return model
 
@@ -408,8 +408,14 @@ def decode(args: Dict):
     words_target = read(args['--target_dict'])
     words_re_target = {i: w for w, i in words_target.items()}
     device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")
-    #实例化定义好的模型
     model = Transformer.load(model_path)
+    print("模型读取成功")
+    model_dict = model.state_dict()
+    print(model_dict)
+    for k, v in model_dict.items():
+        model_dict[k]= v.to(device)
+    print(model_dict)
+    model.load_state_dict(model_dict)
     model.eval()
     de_predict = []
 
@@ -419,20 +425,25 @@ def decode(args: Dict):
         nword_en = f['nword'][()]
         ndata = f['ndata'][()]
         data_en = f['group']
+        torch.manual_seed(0)  # 固定随机种子
         for en_src in make_test(data_en, ndata):
             if args['--cuda']:
                 en_src = en_src.to(device)
-            next_symbol = torch.tensor([[words_en["<sos>"]] for i in range(en_src.size(0))])
-            print('1', next_symbol)
-            flag_test = [0 for i in range(en_src.size(0))]
-            flag_true = [1 for i in range(en_src.size(0))]
             en_outputs = model.encoder(en_src)
+            print('en_outputs:',en_outputs)
             de_input = torch.zeros(en_src.size(0), 0).type_as(en_src.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
             flag = False
+            next_symbol = torch.tensor([[words_en["<sos>"]] for i in range(en_src.size(0))])
+            print('1',next_symbol)
+            flag_test = [0 for i in range(en_src.size(0))]
+            flag_true = [1 for i in range(en_src.size(0))]
             while not flag:
                 # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
                 de_input = torch.cat([de_input.to(device), next_symbol.to(device)],-1).to(device)
+                print('de_input:',de_input)
+                print('de_input:',de_input.size(),'en_src:',en_src.size(),'en_outputs:',en_outputs.size())
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
+                print('de_outputs:', de_outputs)
                 de_outputs = model.classifier(de_outputs)
                 result= torch.argmax(dec_outputs,dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
@@ -462,17 +473,6 @@ def get_schedule(optimizer, warmup_steps, embedding_dim, last_epoch=-1):
         return (embedding_dim ** -0.5) * min(current_step ** -0.5, current_step * (warmup_steps ** -1.5))
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
-
-
-def bleu(reference,candidate,device):
-    score = 0
-    reference = reference.cpu().detach().numpy().tolist()
-    candidate = candidate.cpu().detach().numpy().tolist()
-    l = len(candidate)
-    for i in range(l):
-        score += sentence_bleu([reference[i]], candidate[i],weights=[0.25,0.25,0.25,0.25])
-    return score
-
 
 if __name__ == "__main__":
     args = docopt(__doc__)
