@@ -37,8 +37,8 @@ perl ../mosesdecoder/scripts/training/clean-corpus-n.perl corpus.tok $src $tgt c
 echo "Clean corpus data"
 # Tokenise test
 for lang in $src $tgt; do   
-    perl moses/mosesdecoder/scripts/tokenizer/normalize-punctuation.perl -l $lang < t_$lang.txt | \
-    perl moses/mosesdecoder/scripts/tokenizer/tokenizer.perl -a -l $lang  > test.$lang       # 分词
+    perl ../mosesdecoder/scripts/tokenizer/normalize-punctuation.perl -l $lang < t_$lang.txt | \
+    perl ../mosesdecoder/scripts/tokenizer/tokenizer.perl -a -l $lang  > test.$lang       # 分词
     echo "Tokenise test data"
 done
 
@@ -52,8 +52,8 @@ done
 
 #### Train truecaser and truecase
 for lang in $src $tgt; do
-  perl moses/mosesdecoder/scripts/recaser/train-truecaser.perl -corpus test.$lang -model truecase-test.$lang
-  perl moses/mosesdecoder/scripts/recaser/truecase.perl -model truecase-test.$lang < test.$lang > test.tc.$lang
+  perl ../mosesdecoder/scripts/recaser/train-truecaser.perl -corpus test.$lang -model truecase-test.$lang
+  perl ../mosesdecoder/scripts/recaser/truecase.perl -model truecase-test.$lang < test.$lang > test.tc.$lang
   echo "truecase test data"
 done
 
