@@ -275,6 +275,30 @@ class Transformer(nn.Module):
         de_outputs = self.classifier(de_outputs)
         return de_outputs
 
+    def decode(self, en_src, model,sos,eos):
+        next_symbol = torch.tensor([[sos] for i in range(en_src.size(0))])
+        flag_test = [0 for i in range(en_src.size(0))]
+        flag_true = [1 for i in range(en_src.size(0))]
+        en_outputs = model.encoder(en_src)
+        de_input = torch.zeros(en_src.size(0), 0).type_as(en_src.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
+        flag = False
+        ff = 0
+        while not flag and ff <= 50:
+            # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
+            de_input = torch.cat([de_input.to(device), next_symbol.to(device)], -1).to(device)
+            de_outputs = model.decoder(de_input, en_src, en_outputs)
+            de_outputs = model.classifier(de_outputs)
+            result = torch.argmax(dec_outputs, dim=-1, keepdim=False)
+            next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
+            next_symbol = next_word
+            ff += 1
+            for i in range(en_src.size(0)):
+                if next_word[i].item() == eos:
+                    flag_test[i] = 1
+            if flag_test == flag_true:
+                flag = True
+            print(next_word)
+        return de_input
 
 # 返回一个batch和对应的target
 def make_target(data_en, data_de,data_target, ndata):
@@ -300,17 +324,22 @@ def make_test(data_en,ndata):
 
 def train(args: Dict):
     model_save_path = args['--model_path']
-    with h5py.File("result_en.hdf5", 'r') as f1, h5py.File("result_de.hdf5", 'r') as f2,h5py.File("result_target.hdf5", 'r') as f3:
+    words_de = read("dict_de.txt")
+    words_re_de = {i: w for w, i in words_de.items()}
+    words_target = read("dict_target.txt")
+    words_re_target = {i: w for w, i in words_target.items()}
+    with h5py.File("result_en.hdf5", 'r') as f1, h5py.File("result_de.hdf5", 'r') as f2,h5py.File("result_target.hdf5", 'r') as f3,h5py.File("result_en_test.hdf5", 'r') as f:
         nword_en = f1['nword'][()]
         nword_de = f2['nword'][()]
         ndata = f1['ndata'][()]
         data_en = f1['group']
         data_de = f2['group']
         data_target = f3['group']
+        ndata_test = f['ndata'][()]
+        data_en_test = f['group']
+        torch.manual_seed(0)  # 固定随机种子
         device = torch.device("cuda:" + args['--cuda'] if args['--cuda'] else "cpu")  # 分配设备
-
         model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=512,N=6, heads=8, dropout=0.1,device=device)  # 模型初始化
-
         model.train()
 
         for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
@@ -345,7 +374,6 @@ def train(args: Dict):
                 output = torch.argmax(out, dim=-1)
                 bleu_score = bleu(target, output, device)
                 loss.backward()
-                print('This is bleu_score:', bleu_score)  # 计算bleu值
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
@@ -355,7 +383,22 @@ def train(args: Dict):
                           '{:.6f}'.format(loss),'bleu_score=',bleu_score)
                 if cuda % 2000 == 0:  # 保存模型
                     print('save currently model to [%s]' % model_save_path, file=sys.stderr)
-                    torch.save(model, model_save_path)  # 只存参数
+                    torch.save(model, model_save_path)
+            sos = words_de["<sos>"]
+            eos = words_target["<eos>"]
+            for en_src in make_test(data_en_test, ndata_test):
+                if args['--cuda']:
+                    en_src = en_src.to(device)
+                de_input = model.decode(self, en_src, model, sos, eos)
+                de_predict.append(de_input)  # 把结果存入
+            with open("result_test_de.txt", 'w') as file:
+                l = len(de_predict)
+                for i in range(l):
+                    for j in range(de_predict[i].size(0)):
+                        for k in range(de_predict[i].size(1)):
+                            temp = temp + str(words_re_target[de_predict[i][j][k].item()]) + ' '
+                    file.write(temp + '\n')
+
 
 def read(filename):
     with open(filename, "rb") as file:  # 读数据
@@ -377,7 +420,6 @@ def decode(args: Dict):
     print('use device: %s' % device, file=sys.stderr)
     model = model.to(device)
     with h5py.File("result_en_test.hdf5", 'r') as f:
-        nword_en = f['nword'][()]
         ndata = f['ndata'][()]
         data_en = f['group']
         for en_src in make_test(data_en, ndata):
@@ -404,13 +446,20 @@ def decode(args: Dict):
                     flag = True
                 print(next_word)
             de_predict.append(de_input)  # 把结果存入
-    with open("result_test_de.txt", 'w') as file:
+    bleu_score = 0
+    with open("result_test_de.txt", 'w') as file,open("test_sort_de.txt",'r') as file1:
         l = len(de_predict)
         temp = ""
+        lines=[]
+        for line in file1:
+            lines.append(line)
         for i in range(l):
             for j in range(de_predict[i].size(0)):
                 for k in range(de_predict[i].size(1)):
                     temp = temp + str(words_re_target[de_predict[i][j][k].item()]) + ' '
+            score = bleu([lines[i]], [output], device)
+            print(score)
+            bleu_score += score
             file.write(temp + '\n')
 
 
