@@ -34,8 +34,8 @@ class ScaledDotProductAttention(nn.Module):
         s = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(d_k)  # scores : [batch_size, n_heads, len_q, len_k]
         # mask矩阵填充s（用-1e9填充s中与mask中值为1位置相对应的元素）
         # mask掉那些为了padding长度增加的token，让其通过softmax计算后为0
-        s = s.masked_fill(mask, -1e9)
-
+        if mask is not None:
+            s = s.masked_fill(mask == 0, -1e9)
         p = F.softmax(s, dim=-1)  # 对最后一个维度(v)做softmax
         # s : [batch_size, n_heads, len_q, len_k] * V: [batch_size, n_heads, len_v(=len_k), d_v]
         output = torch.matmul(p, V)  # output: [batch_size, n_heads, len_q, d_v]
@@ -48,6 +48,7 @@ class FeedForward(nn.Module):
     def __init__(self, embedding_dim, device, d_ff=2048):
         super().__init__()
         self.device = device
+        self.embed = embedding_dim
 
         # We set d_ff as a default to 2048
         self.net = nn.Sequential(
@@ -55,13 +56,11 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
-        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        output = self.norm(output + residual)
-        return output.to(self.device) # [bsize, seql, embedding_dim]
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class Mask():
@@ -105,7 +104,6 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
-        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -122,8 +120,7 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        output = self.norm(output + residual)
-        return output.to(self.device)
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -138,6 +135,7 @@ class PositionalEncoding(nn.Module):
         pe[:, 0:: 2] = torch.sin(position * div_term)  # 隔行处理
         pe[:, 1:: 2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)  # 增加批次维度，[1, max_len, embedding_dim]
+
         self.register_buffer('pe', pe)  # 将位置编码矩阵注册为buffer(不参加训练)
 
     def forward(self, x):  # 将一个批次中语句所有词向量与位置编码相加
@@ -346,7 +344,7 @@ def train(args: Dict):
         model = Transformer(src_vocab=nword_en, target_vocab=nword_de, embedding_dim=int(args['--embedding_dim']),
                             N=int(args['--N']), heads=int(args['--heads']), dropout=float(args['--dropout']),
                             device=device)  # 模型初始化
-
+        # model = Transformer.load("model_trans")
         model.train()
 
         for param in model.parameters():  # model.parameters()保存的是Weights和Bais参数的值
@@ -427,6 +425,7 @@ def decode(args: Dict):
             if args['--cuda']:
                 en_src = en_src.to(device)
             ff = 0
+            print('要翻译的句子序列：',en_src)
             en_outputs = model.encoder(en_src)
             de_input = torch.zeros(en_src.size(0), 0).type_as(en_src.data)  # 初始化一个空的tensor: tensor([], size=(1, 0), dtype=torch.int64)
             flag = False
@@ -439,17 +438,16 @@ def decode(args: Dict):
                 de_input = torch.cat([de_input.to(device), next_symbol.to(device)],-1).to(device)
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
                 de_outputs = model.classifier(de_outputs)
-                result= torch.argmax(de_outputs,dim=-1, keepdim=False)
+                result= torch.argmax(de_outputs, dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
                 next_symbol = next_word
-                print(next_word)
-                print(ff)
                 ff += 1
                 for i in range(en_src.size(0)):
                     if next_word[i].item() == words_target["<eos>"]:
                         flag_test[i] = 1
                 if flag_test == flag_true:
                     flag = True
+            print('翻译的结果序列：',de_input)
             de_predict.append(de_input)  # 把结果存入
             index += 1
     with open("result_test_de.txt", 'w') as file:
@@ -459,7 +457,9 @@ def decode(args: Dict):
             for j in range(de_predict[i].size(0)):
                 for k in range(de_predict[i].size(1)):
                     temp = temp + str(words_re_target[de_predict[i][j][k].item()]) + ' '
-            file.write(temp + '\n')
+            file.write('\n'.join(temp))
+            file.write('\n')
+            temp = ""
 
 
 def get_schedule(optimizer, warmup_steps, embedding_dim, last_epoch=-1):

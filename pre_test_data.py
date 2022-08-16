@@ -122,6 +122,6 @@ if __name__ == "__main__":
 
 # python ..\GIT\pre_test_data.py test.tc.en test_sort_en.txt dict_en.txt result_en_test.hdf5
 # python pre_test_data.py test.BPE.en test_sort_en.txt dict_en.txt result_en_test.hdf5 test.BPE.de test_sort_de.txt
-# perl moses/mosesdecoder/scripts/generic/multi-bleu.perl test.BPE.de < test.BPE.de
+# perl moses/mosesdecoder/scripts/generic/multi-bleu.perl test_sort_de.txt < result_test_de.txt
 # perl moses/mosesdecoder/scripts/generic/mteval-v13a.pl -r test.BPE.de -s test.BPE.de -t test.BPE.de -c -b
 # 　　调用行：

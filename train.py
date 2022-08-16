@@ -58,14 +58,11 @@ class FeedForward(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, embedding_dim),
         )
-        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, input):
         residual = input
         output = self.net(input)
-        output = self.norm(output + residual)
-        return output.to(self.device) # [bsize, seql, embedding_dim]
-        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)  # [bsize, seql, embedding_dim]
 
 
 class Mask():
@@ -109,7 +106,6 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
         self.out = nn.Linear(heads * self.d_k, embedding_dim)
-        self.norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, q, k, v, mask=None):
         residual, bsize = q, q.size(0)
@@ -126,9 +122,7 @@ class MultiHeadAttention(nn.Module):
         # 拼接
         concat = ss.transpose(1, 2).contiguous().view(bsize, -1, self.h *self.d_k) #维度转换 → contiguous()拷贝了一份张量在内存中的地址，然后将地址按照形状改变后的张量的语义进行排列
         output = self.out(concat) #过linear
-        output = self.norm(output + residual)
-        return output.to(self.device)
-        # return nn.LayerNorm(self.embed).to(self.device)(output + residual)
+        return nn.LayerNorm(self.embed).to(self.device)(output + residual)
 
 
 class PositionalEncoding(nn.Module):
@@ -284,11 +278,10 @@ class Transformer(nn.Module):
         flag = False
         ff = 0
         while not flag and ff <= 50:
-            # 预测阶段：dec_input序列会一点点变长（每次添加一个新预测出来的单词）
             de_input = torch.cat([de_input.to(device), next_symbol.to(device)], -1).to(device)
             de_outputs = model.decoder(de_input, en_src, en_outputs)
             de_outputs = model.classifier(de_outputs)
-            result = torch.argmax(dec_outputs, dim=-1, keepdim=False)
+            result = torch.argmax(de_outputs, dim=-1, keepdim=False)
             next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
             next_symbol = next_word
             ff += 1
@@ -372,12 +365,14 @@ def train(args: Dict):
                 out = model(en_src, de_src)
                 loss = Loss(out.transpose(1,2), target)
                 output = torch.argmax(out, dim=-1)
-                bleu_score = bleu(target, output, device)
+                bleu_score += bleu(target, output, device)
                 loss.backward()
                 if cuda % 10 == 0:
                     optimizer.step()  # 更新所有参数
                     optimizer.zero_grad()  # 将模型的参数梯度初始化为0
                     scheduler.step()
+                    print('this is 10 batch bleu_score:',bleu_score)
+                    bleu_score = 0
                 if cuda % 100 == 0:  # 打印loss
                     print("This is {0} epoch,This is {1} batch".format(epoch, cuda), 'loss = ',
                           '{:.6f}'.format(loss),'bleu_score=',bleu_score)
@@ -436,7 +431,7 @@ def decode(args: Dict):
                 de_input = torch.cat([de_input.to(device), next_symbol.to(device)],-1).to(device)
                 de_outputs= model.decoder(de_input, en_src, en_outputs)
                 de_outputs = model.classifier(de_outputs)
-                result= torch.argmax(dec_outputs,dim=-1, keepdim=False)
+                result= torch.argmax(de_outputs,dim=-1, keepdim=False)
                 next_word = result[:, -1].reshape(-1, 1)  # 拿出当前预测的单词(数字)。我们用x'_t对应的输出z_t去预测下一个单词的概率，不用z_1,z_2..z_{t-1}
                 next_symbol = next_word
                 for i in range(en_src.size(0)):
@@ -494,5 +489,6 @@ if __name__ == "__main__":
         raise RuntimeError('invalid run mode')
 
 # python train.py --cuda=1 train --model_path="transformer.pkl"
+# python train.py --cuda=1 decode --model_path="transformer.pkl"
 # python train.py --cuda=0 decode --model_path="model_trans" --en="result_en_test.hdf5" --en_dict="dict_en.txt" --target_dict="dict_target.txt"
 # python train.py --cuda=0 train --en="result_en1.hdf5" --de="result_de1.hdf5" --target="result_target1.hdf5" --model_save_path="model1.trans" --embedding_dim=512 --N=6 --heads=8 --dropout=0.1
